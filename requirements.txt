@@ -1,0 +1,7 @@
+numpy>=1.24
+pandas>=2.0
+pyyaml>=6.0
+pytest>=7.0
+# Only needed by src/ds/generate.py on the GPU machine; the mock run works without them.
+torch>=2.1
+transformers>=4.57  # Olmo 3 support
