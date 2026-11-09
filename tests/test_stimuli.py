@@ -133,6 +133,31 @@ def test_history_work_is_right_and_wrong(pool):
         assert f"answer is {item['wrong_value']}" in item["wrong"]
 
 
+def test_answer_not_in_history(questions, cells):
+    answers = {q["id"]: float(q["answer"]) for q in questions}
+    for row in cells:
+        if row["condition"].startswith("history_"):
+            earlier = " ".join(m["content"] for m in row["messages"][1:-1])
+            assert answers[row["question_id"]] not in numbers_in(earlier), row["question_id"]
+
+
+STYLE_FORBIDDEN = ["stuck", "confused", "not sure how to start"]
+
+
+def style_phrasings(cfg):
+    return [text for cond, phrasings in cfg["cues"].items() if cond.startswith("style_")
+            for text in phrasings.values()]
+
+
+def test_style_phrasings_keep_the_request(cfg):
+    phrasings = style_phrasings(cfg)
+    assert len(phrasings) == 6
+    for text in phrasings:
+        # "solv" so that "solving" in the formal B phrasing counts as the same request.
+        assert "solv" in text.lower(), text
+        assert not any(word in text.lower() for word in STYLE_FORBIDDEN), text
+
+
 def test_phrasings_use_different_history_problems(cells):
     for cell in by_question(cells).values():
         problems_a = {m["content"].split("\n")[0] for m in cell[("history_success", "A")][1:-1:2]}

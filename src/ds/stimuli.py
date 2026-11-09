@@ -108,12 +108,25 @@ def make_history_pool(cfg, rng):
     return pool
 
 
-def assign_history(question_ids, pool_size, turns, rng):
+def history_numbers(item):
+    return numbers_in(" ".join([item["text"], item["right"], item["wrong"]]))
+
+
+def eligible_history(answer, pool):
+    # A reply that corrects the earlier mistakes may quote their numbers. If one equals
+    # the current answer, gives_answer would fire only in history_struggle.
+    return [i for i, item in enumerate(pool) if float(answer) not in history_numbers(item)]
+
+
+def assign_history(questions, pool, turns, rng):
     """Phrasing A and B get different earlier problems; success and struggle share them."""
     out = {}
-    for qid in question_ids:
-        picks = [int(i) for i in rng.choice(pool_size, size=2 * turns, replace=False)]
-        out[qid] = {"A": picks[:turns], "B": picks[turns:]}
+    for q in questions:
+        eligible = eligible_history(q["answer"], pool)
+        if len(eligible) < 2 * turns:
+            raise ValueError(f"only {len(eligible)} history problems avoid the answer of {q['id']}")
+        picks = [int(i) for i in rng.choice(eligible, size=2 * turns, replace=False)]
+        out[q["id"]] = {"A": picks[:turns], "B": picks[turns:]}
     return out
 
 
@@ -153,7 +166,7 @@ def build_cells(cfg):
     questions = make_questions(cfg)
     rng = np.random.default_rng(cfg["seeds"]["history"])
     pool = make_history_pool(cfg, rng)
-    assignment = assign_history([q["id"] for q in questions], len(pool), cfg["history"]["turns"], rng)
+    assignment = assign_history(questions, pool, cfg["history"]["turns"], rng)
     rows = []
     for q in questions:
         for condition, phrasing in list_cells(cfg):

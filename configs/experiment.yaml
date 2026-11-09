@@ -48,15 +48,16 @@ cues:
     history_struggle:
         A: ""
         B: ""
+    # Style phrasings keep the same request and add no statement of need or feeling.
     style_casual:
-        A: "hey can you help me with this one pls"
-        B: "hi so i'm stuck on this"
+        A: "hey can you help me solve this one pls"
+        B: "hi can you help me solve this"
     style_formal:
         A: "Could you please help me solve the following problem?"
-        B: "I would appreciate your help with this problem."
+        B: "I would appreciate your help in solving this problem."
     style_hedged:
-        A: "Sorry if this is a silly question, but I'm not sure how to start."
-        B: "I probably should know this, but I'm confused."
+        A: "Sorry if this is a silly question, but can you help me solve this?"
+        B: "I probably should know this already, but can you help me solve it?"
 
 models:
     # Choose 2-3 open-weight instruction-tuned models of about 7B-8B parameters.
