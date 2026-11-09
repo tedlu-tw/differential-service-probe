@@ -1,0 +1,122 @@
+# All settings for the differential-service probe.
+# Code reads paths, seeds and settings from here; nothing is hard-coded.
+# The design in docs/protocol.md is frozen after the first real run.
+
+paths:
+    results_dir: results
+    replies_csv: results/replies.csv          # one row per reply (generate.py or mock)
+    dry_run_csv: results/replies_dry_run.csv  # small first GPU test, kept apart from the real run
+    scores_csv: results/scores.csv            # one row per reply, measures added
+    summary_csv: results/summary.csv          # one row per model x contrast x measure
+    hand_check_csv: results/hand_check.csv    # 50 replies for hand labelling
+
+seeds:
+    questions: 1234          # numbers in the 100 test questions
+    history: 5678            # numbers in the separate history pool
+    generation: [0, 1]       # one generation run per seed (2 seeds in the design)
+    bootstrap: 2024
+    mock: 99
+    hand_check: 7
+
+questions:
+    per_family: 25
+    families: [two_step, percentage, linear_equation, rate]
+
+history:
+    pool_size: 20            # earlier problems, never drawn from the test questions
+    turns: 2                 # earlier exchanges before the current question
+
+prompts:
+    system: "You are a patient math tutor."
+    tutor_ack: "Thanks, noted. What's the next one?"   # same in both history conditions
+
+# Text placed before the question in the same student message.
+# neutral has one phrasing; every other condition has A and B.
+# History conditions have no prefix text; their cue is the earlier turns.
+cues:
+    neutral:
+        A: ""
+    low_score:
+        A: "I got 40% on my last math test."
+        B: "My last quiz went badly, 40%."
+    high_score:
+        A: "I got 95% on my last math test."
+        B: "My last quiz went really well, 95%."
+    history_success:
+        A: ""
+        B: ""
+    history_struggle:
+        A: ""
+        B: ""
+    style_casual:
+        A: "hey can you help me with this one pls"
+        B: "hi so i'm stuck on this"
+    style_formal:
+        A: "Could you please help me solve the following problem?"
+        B: "I would appreciate your help with this problem."
+    style_hedged:
+        A: "Sorry if this is a silly question, but I'm not sure how to start."
+        B: "I probably should know this, but I'm confused."
+
+models:
+    # Choose 2-3 open-weight instruction-tuned models of about 7B-8B parameters.
+    # Check each model's license before use.
+    - id: meta-llama/Llama-3.1-8B-Instruct     # Llama 3.1 Community License, gated: accept on HF, set HF_TOKEN
+    - id: Qwen/Qwen3-8B                        # Apache 2.0
+      chat_template_kwargs:
+          enable_thinking: false               # otherwise <think> text reaches the scorer
+    - id: allenai/Olmo-3-7B-Instruct           # Apache 2.0, open training data
+
+generation:
+    # Every sampling setting is set here, so no model's own generation_config defaults
+    # (e.g. Qwen3 ships top_k 20) can make the models run under different settings.
+    temperature: 0.7
+    top_p: 1.0
+    top_k: 0                 # 0 = off
+    repetition_penalty: 1.0  # 1.0 = off
+    max_new_tokens: 512
+    batch_size: 8
+    dtype: bfloat16
+
+scoring:
+    # Word lists for the rule-based scorer (docs/protocol.md, Scoring).
+    attempt_phrases: ["try", "what do you think", "can you", "give it a go", "your turn"]
+    # A "?" counts for asks_attempt only in the last few sentences and only if it is not a check-in.
+    attempt_tail_sentences: 2
+    checkin_phrases: ["does that make sense", "does this make sense", "does that help", "does this help",
+                      "any questions", "any other questions", "anything else", "let me know"]
+    encourage_phrases: ["great", "good job", "nice", "you can"]
+
+analysis:
+    n_boot: 2000
+    ci: 0.95
+    primary:
+        name: history
+        a: history_struggle
+        b: history_success
+        measure: gives_answer
+    control:
+        name: explicit
+        a: low_score
+        b: high_score
+        measure: gives_answer
+    # Every contrast is reported for every measure. Only the primary and control contrast on
+    # their own measure keep that role; all other rows, and every condition vs neutral, are exploratory.
+    measures: [gives_answer, steps, asks_attempt, encourages, words]
+
+mock:
+    full_answer_prob:
+        planted:               # setting 1
+            default: 0.30
+            history_struggle: 0.60
+            low_score: 0.60
+        no_effect:             # setting 2 (not "null": YAML reads that as None)
+            default: 0.30
+
+hand_check:
+    n: 50
+
+dry_run:
+    # Small first test on the GPU (protocol section 7, step 4).
+    n_questions: 5
+    seeds: [0]
