@@ -5,8 +5,9 @@ import pandas as pd
 import pytest
 
 from ds import load_config
-from ds.analyze import bootstrap_ci, paired_diffs, question_means, summarize
-from ds.mock import run_mock
+from ds.analyze import (bootstrap_ci, excludes_zero, key_measures, paired_diffs, question_means,
+                        sensitivity, smallest_detectable, summarize)
+from ds.mock import run_mock, sensitivity_run, setting_probs
 from ds.score import score_rows
 from ds.stimuli import build_cells, make_questions
 
@@ -19,18 +20,33 @@ def cfg():
 
 
 @pytest.fixture(scope="module")
-def scored(cfg):
+def questions(cfg):
+    return make_questions(cfg)
+
+
+@pytest.fixture(scope="module")
+def cells(cfg):
+    return build_cells(cfg)
+
+
+@pytest.fixture(scope="module")
+def scored(cfg, questions, cells):
     """Both mock settings in one frame, as two 'models'."""
-    questions, cells = make_questions(cfg), build_cells(cfg)
     rows = []
     for setting in ("planted", "no_effect"):
-        rows += score_rows(run_mock(cells, questions, cfg, setting), questions, cfg["scoring"])
+        rows += score_rows(run_mock(cells, questions, cfg, setting_probs(cfg, setting), f"mock-{setting}"),
+                           questions, cfg["scoring"])
     return pd.DataFrame(rows)
 
 
 @pytest.fixture(scope="module")
 def summary(scored, cfg):
     return summarize(scored, cfg)
+
+
+@pytest.fixture(scope="module")
+def sens_table(cfg, questions, cells):
+    return sensitivity(lambda diff, run: sensitivity_run(cells, questions, cfg, diff, run), cfg)
 
 
 def pick(summary, model, role):
@@ -49,10 +65,22 @@ def test_planted_effect_recovered(summary, role):
 
 
 @pytest.mark.parametrize("role", ["primary", "control"])
-def test_no_effect_interval_covers_zero(summary, role):
-    row = pick(summary, "mock-no_effect", role)
-    assert row.ci_low < 0 < row.ci_high
-    assert abs(row.mean_diff) < 0.1
+def test_no_effect_mean_near_zero(summary, role):
+    assert abs(pick(summary, "mock-no_effect", role).mean_diff) < 0.1
+
+
+@pytest.mark.parametrize("role", ["primary", "control"])
+def test_no_effect_false_positive_rate(cfg, questions, cells, role):
+    # One draw excludes zero about 1 time in 20 by chance, so the no-effect check is
+    # a rate over many runs, not a single interval.
+    c = cfg["analysis"][role]
+    keep = [x for x in cells if x["condition"] in (c["a"], c["b"])]
+    probs = setting_probs(cfg, "no_effect")
+    hits = [excludes_zero(pd.DataFrame(score_rows(run_mock(keep, questions, cfg, probs, "m", run),
+                                                  questions, cfg["scoring"])),
+                          c["a"], c["b"], c["measure"], cfg)
+            for run in range(100)]
+    assert np.mean(hits) <= 0.10               # about 5% expected for a 95% interval
 
 
 def test_resamples_questions_not_replies(summary, scored, cfg):
@@ -66,10 +94,66 @@ def test_resamples_questions_not_replies(summary, scored, cfg):
 
 def test_roles_and_shape(summary, cfg):
     n_contrasts = 2 + (len(cfg["cues"]) - 1)
+    contrast_sets = []
     for model, rows in summary.groupby("model"):
         assert len(rows) == n_contrasts * len(cfg["analysis"]["measures"])
         assert rows.role.value_counts().to_dict() == {"exploratory": len(rows) - 2, "primary": 1, "control": 1}
         assert set(rows[rows.role != "exploratory"].measure) == {"gives_answer"}
+        contrast_sets.append(set(zip(rows.contrast, rows.measure)))
+    # Every model gets every contrast: none is left out or singled out.
+    assert all(s == contrast_sets[0] for s in contrast_sets)
+
+
+# ---------- sensitivity ----------
+
+def test_sensitivity_table(sens_table, cfg):
+    sens = cfg["mock"]["sensitivity"]
+    assert list(sens_table["diff"]) == sens["diffs"]
+    assert (sens_table["runs"] == sens["runs"]).all()
+    shares = list(sens_table["share_excluding_zero"])
+    assert shares == sorted(shares)            # larger planted differences are found more often
+    assert shares[-1] >= sens["power"]         # 0.20 is detectable
+
+
+def test_smallest_detectable():
+    table = pd.DataFrame({"diff": [0.05, 0.10, 0.20], "share_excluding_zero": [0.3, 0.85, 1.0]})
+    assert smallest_detectable(table, 0.80) == 0.10
+    assert np.isnan(smallest_detectable(table.assign(share_excluding_zero=[0.1, 0.2, 0.5]), 0.80))
+
+
+def test_min_detectable_written_to_primary_row(scored, cfg):
+    out = summarize(scored, cfg, min_detectable=0.10)
+    marked = out[out.min_detectable_diff.notna()]
+    assert set(marked.role) == {"primary"} and set(marked.measure) == {"gives_answer"}
+    assert len(marked) == out.model.nunique()
+
+
+# ---------- ceiling or floor rule ----------
+
+def neutral_rows(model, rate, n=100):
+    hits = int(round(rate * n))
+    return [{"model": model, "question_id": f"q{i}", "condition": "neutral", "phrasing": "A",
+             "seed": 0, "gives_answer": int(i < hits)} for i in range(n)]
+
+
+def test_key_measures_ceiling_and_floor(cfg):
+    df = pd.DataFrame(neutral_rows("high", 0.95) + neutral_rows("low", 0.05)
+                      + neutral_rows("mid", 0.50) + neutral_rows("edge", 0.90))
+    assert key_measures(df, cfg) == {"high": "steps", "low": "steps", "mid": "gives_answer",
+                                     "edge": "gives_answer"}
+
+
+def test_key_measures_refuses_other_conditions(cfg, scored):
+    with pytest.raises(ValueError):
+        key_measures(scored, cfg)
+
+
+def test_switched_model_uses_steps_for_primary_and_control(scored, cfg):
+    out = summarize(scored, cfg, keys={"mock-planted": "steps"})
+    switched = out[(out.model == "mock-planted") & (out.role != "exploratory")]
+    assert set(switched.measure) == {"steps"} and set(switched.role) == {"primary", "control"}
+    kept = out[(out.model == "mock-no_effect") & (out.role != "exploratory")]
+    assert set(kept.measure) == {"gives_answer"}
 
 
 # ---------- small hand-built cases ----------
