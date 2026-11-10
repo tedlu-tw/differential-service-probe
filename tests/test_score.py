@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from ds import load_config
-from ds.score import count_steps, score_reply, score_rows
+from ds.score import count_steps, final_number, score_check, score_reply, score_rows, solve_correct
 
 CONFIG = Path(__file__).parents[1] / "configs" / "experiment.yaml"
 
@@ -157,6 +157,38 @@ def test_mentions_history(reply, expected, scoring):
 def test_words(scoring):
     assert score_reply("one two  three\nfour", 1, scoring)["words"] == 4
     assert score_reply("", 1, scoring)["words"] == 0
+
+
+# ---------- pre-freeze checks: solve-only accuracy and manipulation check ----------
+
+@pytest.mark.parametrize("reply,expected", [
+    ("25", 25.0), ("The answer is 25.", 25.0), ("4 x 25 = 100, so 25", 25.0),
+    ("100 then twelve", 12.0), ("twelve, then 100", 100.0), ("no number here", None),
+])
+def test_final_number(reply, expected):
+    assert final_number(reply) == expected
+
+
+def test_solve_correct():
+    assert solve_correct("25", 25) == 1
+    assert solve_correct("$1,200", 1200) == 1
+    assert solve_correct("It is 25, not 26", 25) == 0          # the last number decides
+    assert solve_correct("I am not sure.", 25) == 0
+
+
+@pytest.mark.parametrize("reply,expected,result", [
+    ("Yes, yes.", "yes", (1, 1, 1)),
+    ("1. No\n2. No", "no", (1, 1, 1)),
+    ("1. No 2. Yes", "no", (1, 1, 0)),
+    ("No, the first was wrong, and no, the second was too.", "no", (1, 1, 1)),
+    ("YES and NO", "yes", (1, 1, 0)),
+    ("Yes.", "yes", (0, 0, 0)),                              # only one readable answer
+    ("I can't tell from that.", "no", (0, 0, 0)),             # "know", "not" are not "no"
+    ("Not quite: I know the first one is right.", "yes", (0, 0, 0)),
+])
+def test_score_check(reply, expected, result):
+    out = score_check(reply, expected)
+    assert (out["parsed"], out["item1_correct"], out["item2_correct"]) == result
 
 
 # ---------- the scorer is blind to the cue ----------

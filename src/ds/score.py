@@ -72,6 +72,41 @@ def score_reply(reply, answer, scoring):
             "mentions_history": mentions_history(reply, scoring["history_phrases"])}
 
 
+def final_number(reply):
+    """The last number in the reply, digits or words, in reading order."""
+    found = [(m.start(), float(m.group().replace(",", ""))) for m in NUMBER.finditer(reply)]
+    found += [(m.start(), float(NUMBER_WORDS[m.group(1).lower()])) for m in NUMBER_WORD.finditer(reply)]
+    return max(found)[1] if found else None
+
+
+def solve_correct(reply, answer):
+    return int(final_number(reply) == float(answer))
+
+
+YES_NO = re.compile(r"\b(yes|no)\b", re.IGNORECASE)
+
+
+def score_check(reply, expected):
+    """Manipulation check: the first two yes/no words, each compared with the expected word."""
+    found = [w.lower() for w in YES_NO.findall(reply)][:2]
+    parsed = len(found) == 2
+    return {"parsed": int(parsed),
+            "item1_correct": int(parsed and found[0] == expected),
+            "item2_correct": int(parsed and found[1] == expected)}
+
+
+def score_solve_rows(rows, questions):
+    answers = {q["id"]: q["answer"] for q in questions}
+    return [{**row, "solve_correct": solve_correct(row["reply"], answers[row["question_id"]])}
+            for row in rows]
+
+
+def score_check_rows(rows, expected):
+    # The manipulation check is graded against the condition by design. It is separate
+    # from score_reply, which scores tutoring replies and never sees the condition.
+    return [{**row, **score_check(row["reply"], expected[row["condition"]])} for row in rows]
+
+
 def score_rows(rows, questions, scoring):
     """Add the measures to each reply row. Only the reply and the answer reach the scorer."""
     answers = {q["id"]: q["answer"] for q in questions}
