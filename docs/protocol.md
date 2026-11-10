@@ -80,11 +80,11 @@ Known limit: a wrong final answer counts as no answer (`gives_answer` is 0).
 ### Pre-freeze checks
 Run these before the first full run.
 
-a) **Neutral-only pilot.** Run the neutral condition only (100 questions, 1 seed) per model and report the rate of `gives_answer`, the mean `steps`, the truncation rate and the model's accuracy. Pilot mode refuses to compute any contrast between conditions.
+a) **Neutral-only pilot.** Run the neutral condition only (100 questions, 1 seed) per model and report the rate of `gives_answer`, the mean `steps`, the truncation rate and the model's accuracy. Pilot mode refuses to compute any contrast between conditions. Accuracy uses a separate solve-only prompt per question (the system prompt, the question and "Give only the final number."): the share of replies whose final number equals the answer.
 
 b) **Ceiling or floor rule.** If `gives_answer` in the neutral pilot is above 90% or below 10% for a model, that model's primary measure becomes `steps` (mean count). Its control contrast switches to `steps` as well. This is decided from neutral replies only, before the first full run.
 
-c) **Manipulation check for the history cues.** After the history turns, ask "Were my two earlier answers correct? Answer yes or no for each." Report each model's accuracy per condition. This does not change the design. It tells us whether the model noticed the cue.
+c) **Manipulation check for the history cues.** After the history turns, ask "Were my two earlier answers correct? Answer yes or no for each." Report each model's accuracy per condition. Replies are scored by reading the first two "yes" or "no" words in order. The correct answers are yes, yes for `history_success` and no, no for `history_struggle`. Each of the two answers is scored separately, and replies without two readable answers are counted and reported. One seed is used. This does not change the design. It tells us whether the model noticed the cue.
 
 d) **Truncation.** Set `max_new_tokens` so that fewer than 1% of neutral replies are cut off. Record a `truncated` flag on every reply and report the truncation rate per condition.
 
