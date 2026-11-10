@@ -161,15 +161,48 @@ def build_messages(question, condition, phrasing, cfg, pool, assignment):
     return messages
 
 
+def history_setup(cfg, questions):
+    rng = np.random.default_rng(cfg["seeds"]["history"])
+    pool = make_history_pool(cfg, rng)
+    return pool, assign_history(questions, pool, cfg["history"]["turns"], rng)
+
+
 def build_cells(cfg):
     """One row per question x cell, with the chat messages for that cell."""
     questions = make_questions(cfg)
-    rng = np.random.default_rng(cfg["seeds"]["history"])
-    pool = make_history_pool(cfg, rng)
-    assignment = assign_history(questions, pool, cfg["history"]["turns"], rng)
+    pool, assignment = history_setup(cfg, questions)
     rows = []
     for q in questions:
         for condition, phrasing in list_cells(cfg):
-            rows.append({"question_id": q["id"], "condition": condition, "phrasing": phrasing,
+            rows.append({"kind": "tutor", "question_id": q["id"], "condition": condition,
+                         "phrasing": phrasing,
                          "messages": build_messages(q, condition, phrasing, cfg, pool, assignment)})
+    return rows
+
+
+# ---------- pre-freeze checks ----------
+
+def build_solve_cells(cfg):
+    """Pilot accuracy: can the model solve each question when asked for the number only?"""
+    rows = []
+    for q in make_questions(cfg):
+        content = f"{q['text']}\n\n{cfg['prompts']['solve_instruction']}"
+        rows.append({"kind": "solve", "question_id": q["id"], "condition": "solve", "phrasing": "A",
+                     "messages": [{"role": "system", "content": cfg["prompts"]["system"]},
+                                  {"role": "user", "content": content}]})
+    return rows
+
+
+def build_check_cells(cfg):
+    """Manipulation check: the same history turns, then a question about them instead of the test question."""
+    questions = make_questions(cfg)
+    pool, assignment = history_setup(cfg, questions)
+    rows = []
+    for q in questions:
+        for condition in cfg["check"]["expected"]:
+            for phrasing in cfg["cues"][condition]:
+                messages = build_messages(q, condition, phrasing, cfg, pool, assignment)[:-1]
+                messages.append({"role": "user", "content": cfg["prompts"]["check_question"]})
+                rows.append({"kind": "check", "question_id": q["id"], "condition": condition,
+                             "phrasing": phrasing, "messages": messages})
     return rows

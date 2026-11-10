@@ -9,6 +9,13 @@ paths:
     scores_csv: results/scores.csv            # one row per reply, measures added
     summary_csv: results/summary.csv          # one row per model x contrast x measure
     hand_check_csv: results/hand_check.csv    # 50 replies for hand labelling
+    pilot_csv: results/pilot_replies.csv      # neutral + solve-only replies (pre-freeze check a)
+    pilot_summary_csv: results/pilot_summary.csv
+    check_csv: results/check_replies.csv      # manipulation check replies (pre-freeze check c)
+    check_summary_csv: results/check_summary.csv
+    sensitivity_csv: results/sensitivity.csv
+    diagnostics_csv: results/diagnostics.csv  # truncation and seed identity per model x condition
+    mock_dir: results/mock                    # mock runs write here, same file names, never mixed with real
 
 seeds:
     questions: 1234          # numbers in the 100 test questions
@@ -29,6 +36,18 @@ history:
 prompts:
     system: "You are a patient math tutor."
     tutor_ack: "Thanks, noted. What's the next one?"   # same in both history conditions
+    solve_instruction: "Give only the final number."   # pilot accuracy (pre-freeze check a)
+    check_question: "Were my two earlier answers correct? Answer yes or no for each."   # check c
+
+pilot:                       # pre-freeze checks a, b, d
+    seed: 0                  # one seed
+    truncation_limit: 0.01   # fewer than 1% of neutral replies may be cut off
+
+check:                       # pre-freeze check c
+    seed: 0
+    expected:                # correct answer to each of the two yes/no items
+        history_success: "yes"
+        history_struggle: "no"
 
 # Text placed before the question in the same student message.
 # neutral has one phrasing; every other condition has A and B.
@@ -111,6 +130,8 @@ analysis:
         fallback: steps
 
 mock:
+    solve_accuracy: 0.90       # share of correct solve-only replies
+    check_accuracy: 0.80       # share of correct yes/no items in the manipulation check
     full_answer_prob:
         planted:               # setting 1
             default: 0.30

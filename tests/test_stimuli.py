@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from ds import load_config
-from ds.stimuli import build_cells, make_history_pool, make_questions, numbers_in
+from ds.stimuli import (build_cells, build_check_cells, build_solve_cells, make_history_pool,
+                        make_questions, numbers_in)
 
 CONFIG = Path(__file__).parents[1] / "configs" / "experiment.yaml"
 
@@ -156,6 +157,27 @@ def test_style_phrasings_keep_the_request(cfg):
         # "solv" so that "solving" in the formal B phrasing counts as the same request.
         assert "solv" in text.lower(), text
         assert not any(word in text.lower() for word in STYLE_FORBIDDEN), text
+
+
+def test_solve_cells(cfg, questions):
+    solve = build_solve_cells(cfg)
+    assert len(solve) == 100 and {c["condition"] for c in solve} == {"solve"}
+    for cell, q in zip(solve, questions):
+        assert cell["messages"][0]["content"] == cfg["prompts"]["system"]
+        assert cell["messages"][-1]["content"] == f"{q['text']}\n\n{cfg['prompts']['solve_instruction']}"
+
+
+def test_check_cells_reuse_history_without_the_question(cfg, questions, cells):
+    check = build_check_cells(cfg)
+    assert len(check) == 100 * 2 * 2
+    tutor = by_question(cells)
+    texts = {q["id"]: q["text"] for q in questions}
+    for cell in check:
+        msgs = cell["messages"]
+        assert msgs[-1] == {"role": "user", "content": cfg["prompts"]["check_question"]}
+        # Same system prompt and earlier turns as the tutoring cell; only the last message differs.
+        assert msgs[:-1] == tutor[cell["question_id"]][(cell["condition"], cell["phrasing"])][:-1]
+        assert not any(texts[cell["question_id"]] in m["content"] for m in msgs)
 
 
 def test_phrasings_use_different_history_problems(cells):
