@@ -6,7 +6,13 @@ cue, the condition or the earlier turns, so it cannot be swayed by them.
 import re
 
 # A number not glued to other digits; "1,250" and "32.0" are read as single numbers.
+# "$12" and "12%" need nothing extra: the symbol is simply not part of the match.
 NUMBER = re.compile(r"(?<![\d.])\d+(?:,\d{3})*(?:\.\d+)?(?!\d)")
+NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+    "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split())}
+# No hyphen on either side, so "twenty-one" is not read as 20 and "forty-two" not as 2.
+NUMBER_WORD = re.compile(rf"(?<!-)\b({'|'.join(NUMBER_WORDS)})\b(?!-)", re.IGNORECASE)
 # Models often wrap step labels in markdown ("**Step 1:**", "### 2."), so strip that first.
 STEP_LINE = re.compile(r"^(\d+\.(?!\d)|step\b)", re.IGNORECASE)
 MARKDOWN_LEAD = " \t*#_>"
@@ -14,7 +20,9 @@ SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
 def numbers_in_reply(reply):
-    return [float(n.replace(",", "")) for n in NUMBER.findall(reply)]
+    digits = [float(n.replace(",", "")) for n in NUMBER.findall(reply)]
+    words = [float(NUMBER_WORDS[w.lower()]) for w in NUMBER_WORD.findall(reply)]
+    return digits + words
 
 
 def gives_answer(reply, answer):
@@ -50,12 +58,18 @@ def encourages(reply, phrases):
     return int(has_phrase(reply, phrases))
 
 
+def mentions_history(reply, phrases):
+    # Reply text only: it shows whether the model refers back, without the scorer seeing the history.
+    return int(has_phrase(reply, phrases))
+
+
 def score_reply(reply, answer, scoring):
     return {"gives_answer": gives_answer(reply, answer),
             "steps": count_steps(reply),
             "asks_attempt": asks_attempt(reply, scoring),
             "encourages": encourages(reply, scoring["encourage_phrases"]),
-            "words": len(reply.split())}
+            "words": len(reply.split()),
+            "mentions_history": mentions_history(reply, scoring["history_phrases"])}
 
 
 def score_rows(rows, questions, scoring):

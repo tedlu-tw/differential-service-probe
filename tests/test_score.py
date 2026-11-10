@@ -53,6 +53,34 @@ def test_thousands_comma(scoring):
     assert score_reply("We have 4,30 and 25.", 25, scoring)["gives_answer"] == 1
 
 
+@pytest.mark.parametrize("reply,answer", [
+    ("The answer is 12.", 12),
+    ("The answer is 12.0.", 12),
+    ("The sale price is $12.", 12),
+    ("The discount is 12%.", 12),
+    ("The library has 1,200 books.", 1200),
+    ("Maya's number is twelve.", 12),
+    ("Twenty is the answer.", 20),
+    ("It comes to ZERO.", 0),
+], ids=["plain", "decimal", "dollar", "percent", "thousands", "word", "word-capital", "word-upper"])
+def test_answer_formats_normalised(reply, answer, scoring):
+    assert score_reply(reply, answer, scoring)["gives_answer"] == 1
+
+
+@pytest.mark.parametrize("reply", [
+    "There are twenty-one of them.", "That is forty-two.", "Someone said so.", "It is 120%.",
+])
+def test_number_words_not_misread(reply, scoring):
+    assert score_reply(reply, 20, scoring)["gives_answer"] == 0
+    assert score_reply(reply, 2, scoring)["gives_answer"] == 0
+    assert score_reply(reply, 1, scoring)["gives_answer"] == 0
+
+
+def test_wrong_final_answer_counts_as_no_answer(scoring):
+    # Known limit (protocol): only the correct answer is looked for.
+    assert score_reply("Multiply 8 by 4. So the answer is 31.", 32, scoring)["gives_answer"] == 0
+
+
 def test_known_weakness_step_mentions_answer(scoring):
     # Documented in the protocol: an intermediate step that equals the answer counts.
     reply = "Step 1: 8 × 4 = 32. Now can you finish the last step yourself?"
@@ -113,6 +141,19 @@ def test_encourages(reply, expected, scoring):
     assert score_reply(reply, 32, scoring)["encourages"] == expected
 
 
+@pytest.mark.parametrize("reply,expected", [
+    ("As we did earlier, start with the multiplication.", 1),
+    ("This is like the previous problem.", 1),
+    ("Same idea as the last one.", 1),
+    ("Remember what happened last time?", 1),
+    ("Let's look at your answers first.", 1),
+    ("Start early and check your answer.", 0),
+    ("The next step is to divide.", 0),
+])
+def test_mentions_history(reply, expected, scoring):
+    assert score_reply(reply, 32, scoring)["mentions_history"] == expected
+
+
 def test_words(scoring):
     assert score_reply("one two  three\nfour", 1, scoring)["words"] == 4
     assert score_reply("", 1, scoring)["words"] == 0
@@ -128,6 +169,6 @@ def test_same_reply_same_score_in_every_condition(scoring):
     questions = [{"id": "q", "text": "irrelevant", "answer": 32}]
     rows = [{"question_id": "q", "condition": c, "phrasing": "A", "reply": FULL}
             for c in ("neutral", "history_struggle", "history_success", "low_score")]
-    measures = ["gives_answer", "steps", "asks_attempt", "encourages", "words"]
+    measures = ["gives_answer", "steps", "asks_attempt", "encourages", "words", "mentions_history"]
     scored = score_rows(rows, questions, scoring)
     assert len({tuple(r[m] for m in measures) for r in scored}) == 1

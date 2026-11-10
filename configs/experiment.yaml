@@ -87,6 +87,7 @@ scoring:
     checkin_phrases: ["does that make sense", "does this make sense", "does that help", "does this help",
                       "any questions", "any other questions", "anything else", "let me know"]
     encourage_phrases: ["great", "good job", "nice", "you can"]
+    history_phrases: ["earlier", "previous problem", "last one", "last time", "your answers"]
 
 analysis:
     n_boot: 2000
@@ -103,7 +104,7 @@ analysis:
         measure: gives_answer
     # Every contrast is reported for every measure. Only the primary and control contrast on
     # their own measure keep that role; all other rows, and every condition vs neutral, are exploratory.
-    measures: [gives_answer, steps, asks_attempt, encourages, words]
+    measures: [gives_answer, steps, asks_attempt, encourages, words, mentions_history]
 
 mock:
     full_answer_prob:
