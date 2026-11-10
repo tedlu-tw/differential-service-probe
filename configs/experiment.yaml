@@ -9,6 +9,7 @@ paths:
     scores_csv: results/scores.csv            # one row per reply, measures added
     summary_csv: results/summary.csv          # one row per model x contrast x measure
     hand_check_csv: results/hand_check.csv    # 50 replies for hand labelling
+    hand_check_agreement_csv: results/hand_check_agreement.csv
     pilot_csv: results/pilot_replies.csv      # neutral + solve-only replies (pre-freeze check a)
     pilot_summary_csv: results/pilot_summary.csv
     check_csv: results/check_replies.csv      # manipulation check replies (pre-freeze check c)
