@@ -18,6 +18,9 @@ v3 uses a tutor prompt that withholds the answer by default. It asks whether the
   - the question text,
   - the history problems or history answers, right or wrong (as in v2),
   - any cue text (new in v3: 40 and 95 from the explicit cues). In v2, two questions had the answer 40, so a tutor echoing "40%" under `low_score` would have counted as giving the answer.
+- **Minimum answer (new in v3).** Every answer is at least 21.
+  - **Why:** answers of 20 or less can be matched by list markers ("3.", "Step 3") and number words ("three"). Because `gives_answer` stops the dialogue, a step-by-step hint would then count as giving the answer, and more often in replies with more steps.
+  - **How:** the linear-equation template draws Maya's number from 21 to 60 (v2 used 3 to 25), so that family still has 50 distinct questions. The other templates are unchanged, and questions below the minimum are redrawn.
 - The history pool uses the v2 history seed, so the earlier problems are the v2 problems. Each question is assigned history items from those eligible under the answer rule, as in v2.
 - The wording and numbers of the current question are identical in every condition.
 
@@ -104,7 +107,11 @@ Known limits, as in v2:
 ## Manipulation check (v3 parser)
 - **Question:** the same as v2: "Were my two earlier answers correct? Answer yes or no for each."
 - **Messages:** the system prompt is the `pedagogical` prompt, followed by the history turns and then the check question.
-- **Parser:** it reads combined answers as two items. "Yes, both" and "Both are correct" are read as yes, yes. "No, neither" and "Both were wrong" are read as no, no. Two separate yes/no answers are read as in v2. The phrase lists are in the config.
+- **Parser:** the first rule that reads both items decides. The word lists are in the config.
+  1. **Combined answer, in the first sentence.** "Yes, both" and "Both are correct" are read as yes, yes. "No, neither" and "Both were wrong" are read as no, no.
+  2. **A verdict per item.** For each item, the first clause that names it and contains a verdict word gives that item's verdict. Items are named by phrases such as "first answer", "first one", "second answer" or "second one". In "Your first answer is not correct, and the second answer is also not correct", both items are read as no. A negative word wins over a positive one in the same clause, so "not correct" is no.
+  3. **Two separate yes/no words,** read in order as in v2.
+  - If no rule reads both items, the reply is unparsed.
 - **Unreadable replies** are counted and reported per model and condition. Accuracy is reported over readable replies.
 
 ## Accuracy with working
