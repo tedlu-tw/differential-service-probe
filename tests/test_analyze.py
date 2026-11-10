@@ -5,8 +5,9 @@ import pandas as pd
 import pytest
 
 from ds import load_config
-from ds.analyze import (bootstrap_ci, excludes_zero, key_measures, paired_diffs, question_means,
-                        sensitivity, smallest_detectable, summarize)
+from ds.analyze import (bootstrap_ci, check_report, diagnostics, excludes_zero, key_measures,
+                        paired_diffs, pilot_report, question_means, sensitivity, smallest_detectable,
+                        summarize)
 from ds.mock import run_mock, sensitivity_run, setting_probs
 from ds.score import score_rows
 from ds.stimuli import build_cells, make_questions
@@ -154,6 +155,44 @@ def test_switched_model_uses_steps_for_primary_and_control(scored, cfg):
     assert set(switched.measure) == {"steps"} and set(switched.role) == {"primary", "control"}
     kept = out[(out.model == "mock-no_effect") & (out.role != "exploratory")]
     assert set(kept.measure) == {"gives_answer"}
+
+
+# ---------- pilot, manipulation check, diagnostics ----------
+
+def test_pilot_report(cfg):
+    neutral = pd.DataFrame(neutral_rows("a", 0.95) + neutral_rows("b", 0.40))
+    neutral["steps"] = np.where(neutral["model"] == "a", 3, 1)
+    neutral["truncated"] = [i < 2 for i in range(100)] + [False] * 100
+    solve = pd.DataFrame({"model": ["a"] * 4 + ["b"] * 4, "solve_correct": [1, 1, 1, 0, 1, 0, 0, 0]})
+    out = pilot_report(neutral, solve, cfg).set_index("model")
+    assert out.loc["a", "gives_answer_rate"] == 0.95 and out.loc["b", "gives_answer_rate"] == 0.40
+    assert out.loc["a", "mean_steps"] == 3 and out.loc["a", "truncation_rate"] == 0.02
+    assert out.loc["a", "accuracy"] == 0.75 and out.loc["b", "accuracy"] == 0.25
+    assert out.loc["a", "key_measure"] == "steps" and out.loc["b", "key_measure"] == "gives_answer"
+    assert not out.loc["a", "truncation_ok"] and out.loc["b", "truncation_ok"]
+
+
+def test_pilot_refuses_contrasts(cfg, scored):
+    solve = pd.DataFrame({"model": ["mock-planted"], "solve_correct": [1]})
+    with pytest.raises(ValueError, match="no contrasts"):
+        pilot_report(scored, solve, cfg)
+
+
+def test_check_report():
+    df = pd.DataFrame({"model": ["m"] * 4, "condition": ["history_success"] * 2 + ["history_struggle"] * 2,
+                       "parsed": [1, 1, 1, 0], "item1_correct": [1, 1, 1, 0], "item2_correct": [1, 0, 1, 0]})
+    out = check_report(df).set_index("condition")
+    assert out.loc["history_success", "accuracy"] == 0.75
+    assert out.loc["history_struggle", "accuracy"] == 1.0         # the unreadable reply is not counted as wrong
+    assert out.loc["history_struggle", "n_unparsed"] == 1 and out.loc["history_success", "n_unparsed"] == 0
+
+
+def test_diagnostics():
+    df = pd.DataFrame({"model": "m", "condition": "neutral", "phrasing": "A",
+                       "question_id": ["q1", "q1", "q2", "q2"], "seed": [0, 1, 0, 1],
+                       "reply": ["same", "same", "one", "two"], "truncated": [True, False, False, False]})
+    row = diagnostics(df).iloc[0]
+    assert row.truncation_rate == 0.25 and row.identical_across_seeds == 0.5
 
 
 # ---------- small hand-built cases ----------

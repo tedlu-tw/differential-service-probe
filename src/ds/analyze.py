@@ -43,6 +43,40 @@ def key_measures(neutral_df, cfg):
             for model, rate in rates.items()}
 
 
+# ---------- pre-freeze checks ----------
+
+def pilot_report(neutral_df, solve_df, cfg):
+    """Checks a, b and d per model. Refuses anything but neutral replies: no contrasts here."""
+    if set(neutral_df["condition"]) != {"neutral"}:
+        raise ValueError("pilot mode computes no contrasts: pass neutral replies only")
+    g = neutral_df.groupby("model")
+    out = pd.DataFrame({"n_replies": g.size(), "gives_answer_rate": g["gives_answer"].mean(),
+                        "mean_steps": g["steps"].mean(), "truncation_rate": g["truncated"].mean()})
+    out["accuracy"] = solve_df.groupby("model")["solve_correct"].mean()
+    out["key_measure"] = pd.Series(key_measures(neutral_df, cfg))
+    out["truncation_ok"] = out["truncation_rate"] < cfg["pilot"]["truncation_limit"]
+    return out.rename_axis("model").reset_index()
+
+
+def check_report(df):
+    """Check c per model x condition: accuracy over the yes/no items of readable replies."""
+    g = df.groupby(["model", "condition"])
+    out = pd.DataFrame({"n_prompts": g.size(), "n_unparsed": g["parsed"].apply(lambda s: int((s == 0).sum()))})
+    readable = df[df["parsed"] == 1].groupby(["model", "condition"])
+    out["accuracy"] = readable[["item1_correct", "item2_correct"]].mean().mean(axis=1)
+    return out.reset_index()
+
+
+def diagnostics(df):
+    """Per model x condition: truncation rate, and the share of cells where every seed gave the same reply."""
+    g = df.groupby(["model", "condition"])
+    out = pd.DataFrame({"n_replies": g.size(), "truncation_rate": g["truncated"].mean()})
+    cell = df.groupby(["model", "question_id", "condition", "phrasing"])["reply"].agg(["nunique", "size"])
+    same = (cell["nunique"] == 1) & (cell["size"] > 1)
+    out["identical_across_seeds"] = same.groupby(level=["model", "condition"]).mean()
+    return out.reset_index()
+
+
 # ---------- summary ----------
 
 def list_contrasts(cfg):
