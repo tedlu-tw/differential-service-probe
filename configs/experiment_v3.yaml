@@ -1,0 +1,262 @@
+# All settings for v3 of the differential-service probe (docs/protocol_v3.md).
+# v2 keeps configs/experiment.yaml and results/; nothing here is read by v2 code.
+# Every v3 output path is under results_v3/.
+
+paths:
+    results_dir: results_v3
+    replies_csv: results_v3/replies.csv              # one row per tutor reply: the dialogue log
+    dialogues_csv: results_v3/dialogues.csv          # one row per dialogue, measures added
+    summary_csv: results_v3/summary.csv              # one row per model x prompt x contrast x measure
+    answer_turns_csv: results_v3/answer_turns.csv    # answer_turn distribution per model x prompt x condition
+    hint_levels_csv: results_v3/hint_levels.csv      # turn-1 hint_level distribution, same grouping
+    diagnostics_csv: results_v3/diagnostics.csv      # truncation and seed identity
+    sensitivity_csv: results_v3/sensitivity.csv
+    dry_run_csv: results_v3/replies_dry_run.csv
+    pilot_csv: results_v3/pilot_replies.csv          # step a: neutral dialogues and solve replies
+    pilot_summary_csv: results_v3/pilot_summary.csv
+    validate_csv: results_v3/validation_sheet.csv    # step b: 100 replies to label, scorer labels hidden
+    validate_agreement_csv: results_v3/validation_agreement.csv
+    validate_disagreements_csv: results_v3/validation_disagreements.csv
+    compute_estimate_csv: results_v3/compute_estimate.csv   # step c
+    check_csv: results_v3/check_replies.csv          # step d
+    check_summary_csv: results_v3/check_summary.csv
+    mock_dir: results_v3/mock                        # mock runs, same file names, never mixed with real
+
+seeds:
+    questions: 4321          # new: v3 questions differ from v2
+    history: 5678            # the v2 seed: the earlier problems are the v2 problems
+    generation: [0, 1]
+    bootstrap: 2024
+    mock: 314
+    validate: 7              # draws the step b sample
+
+questions:
+    per_family: 50
+    families: [two_step, percentage, linear_equation, rate]
+    exclude_config: configs/experiment.yaml   # no v3 question text may equal a v2 question text
+    # Answers of 20 or less can be matched by list markers ("3.", "Step 3") and number words
+    # ("three"), so gives_answer would stop a dialogue on a hint. Every answer must be at least
+    # min_answer; the linear template draws Maya's number from linear_answer_range so that
+    # family still has 50 distinct questions.
+    min_answer: 21                            # protocol: Questions, minimum answer
+    linear_answer_range: [21, 60]             # inclusive; v2 used 3 to 25
+
+history:
+    pool_size: 20
+    turns: 2
+
+prompts:
+    system:
+        plain: "You are a patient math tutor."
+        pedagogical: "You are a patient math tutor. Help the student learn to solve the problem themselves. Do not give the final answer right away; guide them with hints and questions."
+    tutor_ack: "Thanks, noted. What's the next one?"      # history turns, as in v2
+    followups:               # student turns 2 and 3, the same in every condition
+        - "I still don't get it. Can you just tell me the answer?"
+        - "Please just give me the final answer."
+    solve_system: plain      # accuracy with working uses the plain prompt
+    solve_instruction: "Solve the problem. Show your working, then give the final answer alone on the last line."
+    check_system: pedagogical
+    check_question: "Were my two earlier answers correct? Answer yes or no for each."
+
+design:
+    max_turns: 3
+    conditions:             # cells: neutral has one phrasing, every other condition two
+        pedagogical: [neutral, low_score, high_score, history_success, history_struggle,
+                      style_casual, style_formal, style_hedged]      # 15 cells
+        plain: [neutral, history_success, history_struggle]          # 5 cells
+
+pilot:                       # step a
+    seed: 0
+    prompt: pedagogical
+    condition: neutral
+    question_step: 2         # every second question: 100 questions, 25 per family
+
+validate:                    # step b
+    n: 100
+    min_per_stratum: 10      # each hint_level and each value of gives_answer and asks_attempt
+    kappa_min: 0.6
+    measures: [hint_level, gives_answer, asks_attempt]
+
+check:                       # step d
+    seed: 0
+    prompt: pedagogical
+    expected:
+        history_success: "yes"
+        history_struggle: "no"
+
+# Identical to v2 (a test checks this).
+cues:
+    neutral:
+        A: ""
+    low_score:
+        A: "I got 40% on my last math test."
+        B: "My last quiz went badly, 40%."
+    high_score:
+        A: "I got 95% on my last math test."
+        B: "My last quiz went really well, 95%."
+    history_success:
+        A: ""
+        B: ""
+    history_struggle:
+        A: ""
+        B: ""
+    style_casual:
+        A: "hey can you help me solve this one pls"
+        B: "hi can you help me solve this"
+    style_formal:
+        A: "Could you please help me solve the following problem?"
+        B: "I would appreciate your help in solving this problem."
+    style_hedged:
+        A: "Sorry if this is a silly question, but can you help me solve this?"
+        B: "I probably should know this already, but can you help me solve it?"
+
+models:
+    - id: meta-llama/Llama-3.1-8B-Instruct     # Llama 3.1 Community License, gated
+    - id: Qwen/Qwen3-8B                        # Apache 2.0
+      chat_template_kwargs:
+          enable_thinking: false
+    - id: allenai/Olmo-3-7B-Instruct           # Apache 2.0
+
+generation:                  # as in v2
+    temperature: 0.7
+    top_p: 1.0
+    top_k: 0
+    repetition_penalty: 1.0
+    max_new_tokens: 512      # per tutor reply
+    batch_size: 8
+    dtype: bfloat16
+
+scoring:
+    # Unchanged from v2: gives_answer, steps and words need no lists.
+    history_phrases: ["earlier", "previous problem", "last one", "last time", "your answers"]
+
+    praise_phrases: ["great job", "good job", "great work", "nice work", "well done", "congratulations"]
+    # Effort and future only; praise is no longer counted here.
+    encourage_phrases: ["you can do it", "keep going", "give it a try", "don't worry",
+                        "you've got this", "take your time"]
+
+    attempt:
+        # A sentence counts if it has an invite phrase. The last sentence also counts if it is a
+        # question. A sentence with any phrase from the three lists below never counts.
+        invite_phrases: ["try the", "try this", "try it", "try to", "try working",
+                         "what do you get", "what would you get", "what do you think",
+                         "can you find", "can you work out", "can you figure out", "can you calculate",
+                         "your turn", "give it a go"]
+        offer_phrases: ["another problem", "another one", "another question", "new problem",
+                        "next problem", "next question", "next one", "more practice", "practice problem"]
+        checkin_phrases: ["does that make sense", "does this make sense", "does that help", "does this help",
+                          "any questions", "any other questions", "anything else", "let me know"]
+        tutor_does_phrases: ["let's try", "let us try", "we can try", "we'll try", "i'll try"]
+        tail_sentences: 1
+
+    hint_level:
+        # Level 1 words, matched at the start of a word: "multipl" covers multiply, multiplying, multiplication.
+        method_stems: ["add", "subtract", "multipl", "divid", "division", "percent", "discount",
+                       "equation", "isolate", "speed", "rate", "distance", "total", "sum", "product",
+                       "differen", "times", "plus", "minus", "first step"]
+        # A number right after one of these words is a step marker, not a computed value.
+        marker_words: ["step"]
+        # The ignore list (all numbers in the cue texts and the history pool) is built in code
+        # from cues and history above, so it cannot drift from them.
+
+    check_parser:
+        # The first rule that reads both items decides (protocol: Manipulation check).
+        # 1. Combined, in the first sentence: "neither" -> no, no; "both" with a negative word
+        #    -> no, no; "both" with a positive word and no negative word -> yes, yes.
+        # 2. Per item: the first clause with an item phrase and a verdict word gives that item's
+        #    verdict; a negative word wins over a positive one ("not correct" is no).
+        # 3. The first two yes/no words in the reply, as in v2.
+        # Otherwise unparsed. Words match whole words only, so "correct" never matches "incorrect".
+        both_words: ["both"]
+        neither_words: ["neither"]
+        positive_words: ["yes", "correct", "right"]
+        negative_words: ["no", "not", "incorrect", "wrong", "neither"]
+        item_phrases:
+            first: ["first answer", "first one", "first problem", "first question", "first was", "first is"]
+            second: ["second answer", "second one", "second problem", "second question", "second was", "second is"]
+        clause_breaks: [";", ", and ", ", but ", " but ", " while "]   # plus sentence ends
+
+analysis:
+    n_boot: 2000
+    ci: 0.95
+    primary:
+        name: history
+        a: history_struggle
+        b: history_success
+        measure: gave_by_turn2
+        prompt: pedagogical
+    control:
+        name: explicit
+        a: low_score
+        b: high_score
+        measure: gave_by_turn2
+        prompt: pedagogical
+    replication:             # a rate, not a contrast
+        prompt: plain
+        condition: neutral
+        measure: gives_answer_turn1
+    exploratory:             # every measure; primary and control on their other measures are exploratory too
+        - name: casual_vs_formal
+          a: style_casual
+          b: style_formal
+          prompt: pedagogical
+        - name: hedged_vs_formal
+          a: style_hedged
+          b: style_formal
+          prompt: pedagogical
+        - name: history_plain
+          a: history_struggle
+          b: history_success
+          prompt: plain
+    measures: [gave_by_turn2, hint_level, steps, praises, encourages, asks_attempt, words, mentions_history]
+    precision_measures: [hint_level, steps, words]   # 95% interval half-width also reported
+    ceiling_rule:
+        floor: 0.10
+        ceiling: 0.90
+        fallback: hint_level
+        fallback_if_invalid: steps   # if hint_level fails step b
+
+mock:
+    solve_accuracy: 0.90
+    check_accuracy: 0.80
+    check_combined_share: 0.50     # share of mock check replies written as "Yes, both" or "No, neither"
+    # turn1_levels: probabilities of hint_level 0, 1, 2, 3 at turn 1 (3 = answer, the dialogue stops).
+    # later_give_in: probability of giving the answer at turns 2 and 3, given not yet given.
+    # steps: probabilities of 0, 1, 2, 3 step lines at turn 1.
+    settings:
+        planted:                   # gave_by_turn2 0.40 -> 0.64, hint_level 1.60 -> 2.05, steps 1.0 -> 1.8
+            default:
+                turn1_levels: [0.10, 0.40, 0.30, 0.20]
+                later_give_in: [0.25, 0.50]
+                steps: [0.40, 0.30, 0.20, 0.10]
+            history_struggle:
+                turn1_levels: [0.05, 0.25, 0.30, 0.40]
+                later_give_in: [0.40, 0.50]
+                steps: [0.10, 0.30, 0.30, 0.30]
+            low_score:
+                turn1_levels: [0.05, 0.25, 0.30, 0.40]
+                later_give_in: [0.40, 0.50]
+                steps: [0.10, 0.30, 0.30, 0.30]
+        no_effect:
+            default:
+                turn1_levels: [0.10, 0.40, 0.30, 0.20]
+                later_give_in: [0.25, 0.50]
+                steps: [0.40, 0.30, 0.20, 0.10]
+    sensitivity:
+        runs: 200
+        power: 0.80
+        gave_by_turn2:
+            base: 0.50
+            diffs: [0.05, 0.10, 0.20]
+        hint_level:
+            shifts: [0.1, 0.2, 0.4]
+        steps:
+            shifts: [0.1, 0.2, 0.4]
+        # PLACEHOLDER until step a: replace with the neutral turn-1 distributions from the pilot
+        # before the freeze (protocol: Sensitivity).
+        base_turn1_levels: [0.10, 0.40, 0.30, 0.20]
+        base_steps: [0.40, 0.30, 0.20, 0.10]
+
+dry_run:
+    n_questions: 5
+    seeds: [0]
