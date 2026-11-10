@@ -112,3 +112,188 @@ def score_rows(rows, questions, scoring):
     answers = {q["id"]: q["answer"] for q in questions}
     return [{**row, **score_reply(row["reply"], answers[row["question_id"]], scoring)}
             for row in rows]
+
+
+# =====================================================================================
+# v3 (docs/protocol_v3.md). New functions only; everything above is v2 and unchanged.
+# The v3 scorer gets the reply, the question text and the answer, never the cue,
+# the system prompt or the earlier turns.
+# =====================================================================================
+
+def normalise(reply):
+    # Models often write "Let’s" and "don’t"; the phrase lists use the plain apostrophe.
+    return reply.replace("’", "'").replace("‘", "'")
+
+
+def praises(reply, scoring):
+    return int(has_phrase(normalise(reply), scoring["praise_phrases"]))
+
+
+def encourages_v3(reply, scoring):
+    # Fixed in v3: effort and future phrases only; praise is counted by praises().
+    return int(has_phrase(normalise(reply), scoring["encourage_phrases"]))
+
+
+def excluded_sentence(sentence, attempt):
+    return has_phrase(sentence, attempt["offer_phrases"] + attempt["checkin_phrases"]
+                      + attempt["tutor_does_phrases"])
+
+
+def asks_attempt_v3(reply, scoring):
+    """An invitation to work on this problem, or a closing question about it.
+
+    Offers of a new problem, the echoed "What's the next one?", check-ins and the tutor's own
+    "Let's try..." never count, wherever they appear.
+    """
+    attempt, parts = scoring["attempt"], sentences(normalise(reply))
+    kept = [s for s in parts if not excluded_sentence(s, attempt)]
+    invited = any(has_phrase(s, attempt["invite_phrases"]) for s in kept)
+    tail = parts[-attempt["tail_sentences"]:] if parts else []
+    asks_last = any("?" in s and not excluded_sentence(s, attempt) for s in tail)
+    return int(invited or asks_last)
+
+
+# ---------- hint_level ----------
+
+LIST_MARKER = re.compile(r"^\s*[*#_>]*\s*\d+[.)](?!\d)", re.MULTILINE)
+
+
+def digit_numbers(text):
+    return {float(n.replace(",", "")) for n in NUMBER.findall(text)}
+
+
+def without_markers(reply, marker_words):
+    # "1." at the start of a line and "Step 2" label the help; they are not computed values.
+    text = LIST_MARKER.sub(" ", reply)
+    return re.sub(rf"\b(?:{'|'.join(map(re.escape, marker_words))})\s*\d+", " ", text, flags=re.IGNORECASE)
+
+
+def names_method(reply, stems):
+    # Stems match at the start of a word: "multipl" covers multiply, multiplying, multiplication.
+    return any(re.search(rf"\b{re.escape(s)}", reply, re.IGNORECASE) for s in stems)
+
+
+def hint_level(reply, question_text, answer, scoring, ignore):
+    """0 no math content, 1 method or first step, 2 computed intermediate value, 3 the answer.
+
+    ignore: the numbers in every cue text and the whole history pool. It is the same in every
+    condition, so a tutor echoing "40%" or an earlier answer cannot raise the level in one condition.
+    """
+    if gives_answer(reply, answer):
+        return 3
+    cfg, given = scoring["hint_level"], digit_numbers(question_text)
+    numbers = digit_numbers(without_markers(reply, cfg["marker_words"]))
+    if numbers - given - set(ignore):
+        return 2
+    if names_method(reply, cfg["method_stems"]) or numbers & given:
+        return 1
+    return 0
+
+
+def score_reply_v3(reply, question_text, answer, scoring, ignore):
+    """All turn-level v3 measures for one tutor reply."""
+    return {"gives_answer": gives_answer(reply, answer),
+            "hint_level": hint_level(reply, question_text, answer, scoring, ignore),
+            "steps": count_steps(reply),
+            "praises": praises(reply, scoring),
+            "encourages": encourages_v3(reply, scoring),
+            "asks_attempt": asks_attempt_v3(reply, scoring),
+            "words": len(reply.split()),
+            "mentions_history": mentions_history(normalise(reply), scoring["history_phrases"])}
+
+
+def score_rows_v3(rows, questions, scoring, ignore):
+    """Add the v3 measures to every tutor-reply row. Only the reply and the question reach the scorer."""
+    by_id = {q["id"]: q for q in questions}
+    return [{**row, **score_reply_v3(row["reply"], by_id[row["question_id"]]["text"],
+                                     by_id[row["question_id"]]["answer"], scoring, ignore)}
+            for row in rows]
+
+
+# ---------- accuracy with working ----------
+
+def last_line_number(reply):
+    """The last number on the last line that has a letter or digit; None if that line has no number.
+
+    Lines of markup only (a closing "\\]" or "```") are skipped, so "\\boxed{63}" on its own line is read.
+    """
+    lines = [line for line in reply.splitlines() if re.search(r"[A-Za-z0-9]", line)]
+    found = NUMBER.findall(lines[-1]) if lines else []
+    return float(found[-1].replace(",", "")) if found else None
+
+
+def score_solve_rows_v3(rows, questions):
+    answers = {q["id"]: q["answer"] for q in questions}
+    out = []
+    for row in rows:
+        number = last_line_number(row["reply"])
+        out.append({**row, "solve_parsed": int(number is not None),
+                    "solve_correct": int(number == float(answers[row["question_id"]]))})
+    return out
+
+
+# ---------- manipulation check (v3 parser) ----------
+
+def has_word(text, words):
+    return any(re.search(rf"\b{re.escape(w)}\b", text, re.IGNORECASE) for w in words)
+
+
+def verdict(clause, parser):
+    # A negative word wins, so "not correct" is "no".
+    if has_word(clause, parser["negative_words"]):
+        return "no"
+    return "yes" if has_word(clause, parser["positive_words"]) else None
+
+
+def read_combined(reply, parser):
+    """Rule 1: a combined answer in the first sentence ("Yes, both", "No, neither")."""
+    first = (sentences(reply) or [""])[0]
+    if has_word(first, parser["neither_words"]):
+        return ("no", "no")
+    if has_word(first, parser["both_words"]):
+        v = verdict(first, parser)
+        return (v, v) if v else None
+    return None
+
+
+def clauses(reply, breaks):
+    pattern = "|".join(map(re.escape, breaks))
+    return [c for s in sentences(reply) for c in re.split(pattern, s, flags=re.IGNORECASE) if c.strip()]
+
+
+def read_per_item(reply, parser):
+    """Rule 2: for each item, the first clause that names it and holds a verdict word."""
+    found = []
+    for item in ("first", "second"):
+        named = [c for c in clauses(reply, parser["clause_breaks"]) if has_word(c, parser["item_phrases"][item])]
+        found.append(next((v for v in map(lambda c: verdict(c, parser), named) if v), None))
+    return tuple(found) if all(found) else None
+
+
+def read_yes_no(reply):
+    """Rule 3: the first two yes/no words, as in v2."""
+    found = [w.lower() for w in YES_NO.findall(reply)][:2]
+    return tuple(found) if len(found) == 2 else None
+
+
+def read_check(reply, parser):
+    reply = normalise(reply)
+    for name, rule in (("combined", lambda: read_combined(reply, parser)),
+                       ("per_item", lambda: read_per_item(reply, parser)),
+                       ("yes_no", lambda: read_yes_no(reply))):
+        items = rule()
+        if items:
+            return items, name
+    return None, "unparsed"
+
+
+def score_check_v3(reply, expected, parser):
+    items, rule = read_check(reply, parser)
+    return {"parsed": int(items is not None), "check_rule": rule,
+            "item1_correct": int(items is not None and items[0] == expected),
+            "item2_correct": int(items is not None and items[1] == expected)}
+
+
+def score_check_rows_v3(rows, expected, parser):
+    # Graded against the condition by design, as in v2; separate from the tutor-reply scorer.
+    return [{**row, **score_check_v3(row["reply"], expected[row["condition"]], parser)} for row in rows]
