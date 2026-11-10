@@ -133,12 +133,14 @@ Report every contrast for every model. Do not average, rank or highlight models.
 
 ## Hand-check agreement
 
-_Not yet run. Fill in from `results/hand_check_agreement.csv` after the real run._
+From `results/hand_check_agreement.csv`: 50 random replies from the real run, labelled by hand by the author, blind to condition and to the rule scores.
 
 | Measure | n | Agreement | Rule 1, hand 0 | Rule 0, hand 1 |
 |---|---|---|---|---|
-| gives_answer | 50 | | | |
-| asks_attempt | 50 | | | |
+| gives_answer | 50 | 1.00 | 0 | 0 |
+| asks_attempt | 50 | 0.92 | 4 | 0 |
+
+All 50 replies gave the answer, by both the hand labels and the rule, so this sample cannot test `gives_answer` on replies that withhold it. Every `asks_attempt` disagreement is the rule saying yes where the hand label said no.
 
 ## Deviations from the protocol
 
