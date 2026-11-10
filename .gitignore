@@ -4,3 +4,4 @@ __pycache__/
 results*/
 *.out
 *.log
+*results.tar.gz
