@@ -144,6 +144,17 @@ _Not yet run. Fill in from `results/hand_check_agreement.csv` after the real run
 
 _None so far._ Report here any change made after the first real run to the rubric, the cues, the primary contrast or the exclusion rules.
 
+## Data availability
+
+The raw v2 replies, scores and summaries are held privately until the planned paper is published, and are available on request. The archive below holds the `results/` folder from the real run. Its checksum fixes which data the reported numbers came from.
+
+`v2-results.tar.gz` sha256: `3aba09bccea9b8031d781892ee066b3419343995a4ccd8a7b862a2b70cce0e26`
+
+To check a copy:
+```bash
+echo "3aba09bccea9b8031d781892ee066b3419343995a4ccd8a7b862a2b70cce0e26  v2-results.tar.gz" | shasum -a 256 -c
+```
+
 ## Limits
 
 **What the study can and cannot show**
