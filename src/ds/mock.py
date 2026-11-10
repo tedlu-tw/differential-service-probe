@@ -3,6 +3,7 @@
 It ignores the messages and picks a full-answer or a hint reply with a probability
 set by the condition. The analysis must find the planted effect and nothing in the
 no-effect setting; if it fails either check, the analysis is wrong, not the model.
+It also answers the solve-only and manipulation-check prompts of the pre-freeze checks.
 """
 import numpy as np
 import pandas as pd
@@ -40,18 +41,44 @@ def mock_reply(question, condition, probs, rng):
     return hint_reply(question)
 
 
-def run_mock(cells, questions, cfg, probs, name, run=0):
-    """One row per cell and generation seed, in the same columns generate.py writes."""
-    by_id = {q["id"]: q for q in questions}
+def solve_reply(question, accuracy, rng):
+    return str(question["answer"] if rng.random() < accuracy else question["answer"] + 1)
+
+
+def check_reply(expected, accuracy, rng):
+    other = "no" if expected == "yes" else "yes"
+    first, second = (expected if rng.random() < accuracy else other for _ in range(2))
+    return f"1. {first.capitalize()}\n2. {second.capitalize()}"
+
+
+def mock_rows(cells, cfg, name, seeds, reply_fn, run=0):
+    """One row per cell and seed, in the same columns generate.py writes."""
     rows = []
-    for seed in cfg["seeds"]["generation"]:
+    for seed in seeds:
         rng = np.random.default_rng([cfg["seeds"]["mock"], run, seed])
         for cell in cells:
-            reply = mock_reply(by_id[cell["question_id"]], cell["condition"], probs, rng)
             rows.append({"model": name, "seed": seed, "question_id": cell["question_id"],
                          "condition": cell["condition"], "phrasing": cell["phrasing"],
-                         "reply": reply, "truncated": False})
+                         "reply": reply_fn(cell, rng), "truncated": False, "system_mode": "mock"})
     return rows
+
+
+def run_mock(cells, questions, cfg, probs, name, run=0, seeds=None):
+    by_id = {q["id"]: q for q in questions}
+    fn = lambda cell, rng: mock_reply(by_id[cell["question_id"]], cell["condition"], probs, rng)
+    return mock_rows(cells, cfg, name, seeds or cfg["seeds"]["generation"], fn, run)
+
+
+def run_mock_solve(cells, questions, cfg, name, seeds):
+    by_id = {q["id"]: q for q in questions}
+    fn = lambda cell, rng: solve_reply(by_id[cell["question_id"]], cfg["mock"]["solve_accuracy"], rng)
+    return mock_rows(cells, cfg, name, seeds, fn)
+
+
+def run_mock_check(cells, cfg, name, seeds):
+    expected = cfg["check"]["expected"]
+    fn = lambda cell, rng: check_reply(expected[cell["condition"]], cfg["mock"]["check_accuracy"], rng)
+    return mock_rows(cells, cfg, name, seeds, fn)
 
 
 def sensitivity_run(cells, questions, cfg, diff, run):
