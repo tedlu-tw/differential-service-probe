@@ -5,7 +5,8 @@ On the pod, from the repo root:
     PYTHONPATH=src python -m ds.generate --model Qwen/Qwen3-8B        # full design, one model
 
 Rows are appended after every batch, and cells already in the output CSV are skipped,
-so a run that stops part-way can simply be started again.
+so a run that stops part-way can simply be started again. Each row records whether the
+reply was cut off (truncated) and how the system prompt was passed (system_mode).
 """
 import argparse
 import time
@@ -65,6 +66,38 @@ def render(tokenizer, messages, template_kwargs):
                                          **template_kwargs)
 
 
+SYSTEM_PROBE = "SYSTEM-ROLE-PROBE"
+
+
+def system_mode(tokenizer, template_kwargs):
+    """'system_role' if the chat template keeps a system message, else 'prepended'."""
+    probe = [{"role": "system", "content": SYSTEM_PROBE}, {"role": "user", "content": "hi"}]
+    try:
+        text = render(tokenizer, probe, template_kwargs)
+    except Exception:  # some templates raise on a system message instead of dropping it
+        return "prepended"
+    return "system_role" if SYSTEM_PROBE in text else "prepended"
+
+
+def prepend_system(messages):
+    """Fold the system prompt into the first user message, for templates without a system role."""
+    assert messages[0]["role"] == "system"
+    rest = [dict(m) for m in messages[1:]]
+    first = next(i for i, m in enumerate(rest) if m["role"] == "user")
+    rest[first]["content"] = f"{messages[0]['content']}\n\n{rest[first]['content']}"
+    return rest
+
+
+def prompt_cells(cells, tokenizer, template_kwargs):
+    mode = system_mode(tokenizer, template_kwargs)
+    prompted = []
+    for c in cells:
+        messages = c["messages"] if mode == "system_role" else prepend_system(c["messages"])
+        prompted.append({**c, "prompt": render(tokenizer, messages, template_kwargs), "system_mode": mode})
+    # Prompts of similar length in one batch waste less padding.
+    return sorted(prompted, key=lambda c: len(c["prompt"])), mode
+
+
 def stop_ids(model, tokenizer):
     eos = model.generation_config.eos_token_id
     ids = set(eos) if isinstance(eos, list) else {eos}
@@ -101,21 +134,28 @@ def run_seed(model, tokenizer, model_id, seed, cells, cfg, out_path):
         batch = todo[i:i + gen["batch_size"]]
         new = generate_batch(model, tokenizer, [c["prompt"] for c in batch], gen)
         replies, truncated = decode(tokenizer, new, stops, gen["max_new_tokens"])
-        append_rows(out_path, [dict(zip(KEY, cell_key(model_id, seed, c)), reply=r, truncated=t)
+        append_rows(out_path, [dict(zip(KEY, cell_key(model_id, seed, c)), reply=r, truncated=t,
+                                    system_mode=c["system_mode"])
                                for c, r, t in zip(batch, replies, truncated)])
         print(f"{model_id} seed={seed} {i + len(batch)}/{len(todo)} {time.time() - start:.0f}s", flush=True)
 
 
 def run_model(spec, cells, seeds, cfg, out_path):
     model, tokenizer = load_model(spec["id"], cfg["generation"]["dtype"])
-    kwargs = spec.get("chat_template_kwargs", {})
-    # Prompts of similar length in one batch waste less padding.
-    prompted = sorted(({**c, "prompt": render(tokenizer, c["messages"], kwargs)} for c in cells),
-                      key=lambda c: len(c["prompt"]))
+    prompted, mode = prompt_cells(cells, tokenizer, spec.get("chat_template_kwargs", {}))
+    print(f"{spec['id']} system_mode={mode}", flush=True)
     for seed in seeds:
         run_seed(model, tokenizer, spec["id"], seed, prompted, cfg, out_path)
     del model
     torch.cuda.empty_cache()
+
+
+def check_generation(gen, seeds):
+    # At temperature 0 decoding is greedy, so every seed would give the same reply.
+    if gen["temperature"] <= 0:
+        raise ValueError(f"temperature must be above zero, got {gen['temperature']}")
+    if len(set(seeds)) != len(seeds):
+        raise ValueError(f"generation seeds must all differ, got {seeds}")
 
 
 def parse_args():
@@ -135,6 +175,7 @@ def main():
     if not specs:
         raise SystemExit(f"{args.model} is not a model id in {args.config}")
     seeds = cfg["dry_run"]["seeds"] if args.dry_run else cfg["seeds"]["generation"]
+    check_generation(cfg["generation"], seeds)
     out_path = cfg["paths"]["dry_run_csv" if args.dry_run else "replies_csv"]
     cells = select_cells(cfg, args.dry_run)
     for spec in specs:
