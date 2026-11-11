@@ -157,3 +157,187 @@ def sensitivity(make_dataset, cfg):
 def smallest_detectable(table, power):
     ok = table[table["share_excluding_zero"] >= power]
     return float(ok["diff"].min()) if len(ok) else np.nan
+
+
+# =====================================================================================
+# v3 (docs/protocol_v3.md). New functions only; everything above is v2 and unchanged.
+# A dialogue is the unit: one row per dialogue, built from the scored tutor-reply rows.
+# Every contrast is computed within one system prompt, per model, paired per question.
+# =====================================================================================
+
+DIALOGUE_KEY = ["model", "question_id", "prompt", "condition", "phrasing", "seed"]
+TURN1_MEASURES = ["gives_answer", "hint_level", "steps", "praises", "encourages", "asks_attempt", "words",
+                  "mentions_history"]
+
+
+def dialogues_v3(rows):
+    """One row per dialogue: answer_turn (NaN = none), gave_by_turn2, and the turn-1 measures."""
+    df = pd.DataFrame(rows)
+    first = df[df["turn"] == 1].set_index(DIALOGUE_KEY)
+    g = df.groupby(DIALOGUE_KEY)
+    if len(first) != g.ngroups:
+        raise ValueError("every dialogue needs a turn-1 reply")
+    out = first[TURN1_MEASURES + ["reply"]].rename(columns={"gives_answer": "gives_answer_turn1"})
+    out = out.join(g.agg(n_turns=("turn", "max"), any_truncated=("truncated", "max")))
+    out["answer_turn"] = df[df["gives_answer"] == 1].groupby(DIALOGUE_KEY)["turn"].min().reindex(out.index)
+    out["gave_by_turn2"] = (out["answer_turn"] <= 2).astype(int)
+    return out.reset_index()
+
+
+# ---------- contrasts and summary ----------
+
+def contrasts_v3(cfg):
+    an = cfg["analysis"]
+    return ([{**an["primary"], "role": "primary"}, {**an["control"], "role": "control"}]
+            + [{**c, "measure": None, "role": "exploratory"} for c in an["exploratory"]])
+
+
+def summary_row_v3(model, contrast, measure, diffs, key, cfg, min_detectable):
+    row = {"prompt": contrast["prompt"], **summary_row(model, contrast, measure, diffs, key, cfg)}
+    wide = measure in cfg["analysis"]["precision_measures"]
+    row["precision"] = (row["ci_high"] - row["ci_low"]) / 2 if wide else np.nan
+    # Each possible primary measure has its own detectable difference from the sensitivity runs.
+    row["min_detectable_diff"] = min_detectable.get(measure, np.nan) if row["role"] == "primary" else np.nan
+    return row
+
+
+def summarize_v3(d, cfg, keys=None, min_detectable=None):
+    """One row per model x contrast x measure, every contrast for every model, within one prompt each.
+
+    keys: model -> key measure from the ceiling/floor rule. min_detectable: measure -> smallest size.
+    """
+    measures, keys, min_detectable = cfg["analysis"]["measures"], keys or {}, min_detectable or {}
+    means = {(p, m): question_means(d[d["prompt"] == p], m) for p in d["prompt"].unique() for m in measures}
+    rows = []
+    for model in sorted(d["model"].unique()):
+        for contrast in contrasts_v3(cfg):
+            for measure in measures:
+                table = means.get((contrast["prompt"], measure))
+                has = table is not None and model in table.index.get_level_values("model")
+                diffs = paired_diffs(table.loc[model], contrast["a"], contrast["b"]) if has else pd.Series(dtype=float)
+                rows.append(summary_row_v3(model, contrast, measure, diffs, keys.get(model), cfg, min_detectable))
+    return pd.DataFrame(rows)
+
+
+def replication_v3(d, cfg):
+    """Turn-1 answer rate under the plain prompt, neutral cells, per model (a rate, not a contrast)."""
+    an, r = cfg["analysis"], cfg["analysis"]["replication"]
+    sub, rows = d[(d["prompt"] == r["prompt"]) & (d["condition"] == r["condition"])], []
+    for model, g in sub.groupby("model"):
+        per_question = g.groupby("question_id")[r["measure"]].mean()
+        rate, lo, hi = bootstrap_ci(per_question, an["n_boot"], an["ci"], cfg["seeds"]["bootstrap"])
+        rows.append({"model": model, "prompt": r["prompt"], "condition": r["condition"], "measure": r["measure"],
+                     "n_questions": len(per_question), "rate": rate, "ci_low": lo, "ci_high": hi})
+    return pd.DataFrame(rows)
+
+
+# ---------- distributions ----------
+
+def shares(d, column, levels):
+    """Share of dialogues at each level, per model x prompt x condition. Every level gets a column."""
+    counts = pd.crosstab([d["model"], d["prompt"], d["condition"]], d[column]).reindex(columns=levels, fill_value=0)
+    return counts.div(counts.sum(axis=1), axis=0).rename(columns=lambda c: f"{column}_{c}").reset_index()
+
+
+def answer_turn_shares(d):
+    turns = d["answer_turn"].map({1: "1", 2: "2", 3: "3"}).fillna("none")
+    return shares(d.assign(answer_turn=turns), "answer_turn", ["1", "2", "3", "none"])
+
+
+def hint_level_shares(d):
+    return shares(d, "hint_level", [0, 1, 2, 3])
+
+
+# ---------- ceiling or floor rule ----------
+
+def key_measures_v3(neutral_d, cfg, hint_valid=True):
+    """Per model, the measure for the primary and control contrasts, from the neutral pilot dialogues only."""
+    an = cfg["analysis"]
+    if set(zip(neutral_d["prompt"], neutral_d["condition"])) != {(an["primary"]["prompt"], "neutral")}:
+        raise ValueError("the ceiling/floor rule is decided from neutral dialogues under the pedagogical prompt only")
+    rule = an["ceiling_rule"]
+    fallback = rule["fallback"] if hint_valid else rule["fallback_if_invalid"]
+    rates = neutral_d.groupby("model")["gave_by_turn2"].mean()
+    return {model: fallback if rate > rule["ceiling"] or rate < rule["floor"] else an["primary"]["measure"]
+            for model, rate in rates.items()}
+
+
+# ---------- pre-freeze reports ----------
+
+def pilot_report_v3(rows, solve_df, cfg):
+    """Step a per model. Refuses anything but neutral pilot dialogues: no contrasts here."""
+    d, p, rule = dialogues_v3(rows), cfg["pilot"], cfg["analysis"]["ceiling_rule"]
+    if set(zip(d["prompt"], d["condition"])) != {(p["prompt"], p["condition"])}:
+        raise ValueError("pilot mode computes no contrasts: pass neutral pedagogical dialogues only")
+    g = d.groupby("model")
+    out = pd.DataFrame({"n_dialogues": g.size(), "gave_by_turn2": g["gave_by_turn2"].mean()})
+    turns = answer_turn_shares(d).drop(columns=["prompt", "condition"]).set_index("model")
+    out = out.join(turns)
+    out["truncation_rate"] = pd.DataFrame(rows).groupby("model")["truncated"].mean()
+    solve = solve_df.groupby("model")
+    out["accuracy_with_working"] = solve["solve_correct"].mean()
+    out["solve_unparsed_rate"] = 1 - solve["solve_parsed"].mean()
+    out["ceiling_rule_applies"] = (out["gave_by_turn2"] > rule["ceiling"]) | (out["gave_by_turn2"] < rule["floor"])
+    return out.rename_axis("model").reset_index()
+
+
+def check_report_v3(df):
+    """Step d per model x condition: accuracy over readable replies, the unparsed rate, and which rule read each."""
+    out = check_report(df).set_index(["model", "condition"])
+    out["unparsed_rate"] = out["n_unparsed"] / out["n_prompts"]
+    rules = pd.crosstab([df["model"], df["condition"]], df["check_rule"]).add_prefix("rule_")
+    return out.join(rules).reset_index()
+
+
+def diagnostics_v3(rows):
+    """Per model x prompt x condition: dialogues, replies, truncation, and identical turn-1 replies across seeds."""
+    df, cols = pd.DataFrame(rows), ["model", "prompt", "condition"]
+    g = df.groupby(cols)
+    out = pd.DataFrame({"n_replies": g.size(), "truncation_rate": g["truncated"].mean()})
+    first = df[df["turn"] == 1]
+    out["n_dialogues"] = first.groupby(cols).size()
+    cell = first.groupby(cols + ["question_id", "phrasing"])["reply"].agg(["nunique", "size"])
+    out["identical_across_seeds"] = ((cell["nunique"] == 1) & (cell["size"] > 1)).groupby(level=cols).mean()
+    return out.reset_index()
+
+
+def cohen_kappa(a, b):
+    """Unweighted Cohen's kappa between two label lists (step b)."""
+    a, b = np.asarray(a), np.asarray(b)
+    observed = np.mean(a == b)
+    chance = sum(np.mean(a == label) * np.mean(b == label) for label in np.union1d(a, b))
+    return np.nan if chance == 1 else float((observed - chance) / (1 - chance))
+
+
+# ---------- sensitivity (mock) ----------
+
+SENSITIVITY_MEASURES = ("gave_by_turn2", "hint_level", "steps")
+
+
+def sensitivity_sizes(cfg, measure):
+    s = cfg["mock"]["sensitivity"][measure]
+    return s["diffs"] if measure == "gave_by_turn2" else s["shifts"]
+
+
+def primary_excludes_zero_v3(d, cfg, measure):
+    p = cfg["analysis"]["primary"]
+    return excludes_zero(d[d["prompt"] == p["prompt"]], p["a"], p["b"], measure, cfg)
+
+
+def sensitivity_v3(make_dataset, cfg):
+    """Share of simulated runs whose primary interval excludes zero, per measure and planted size.
+
+    make_dataset(measure, size, run) returns scored tutor-reply rows of one model (mock.sensitivity_rows_v3).
+    """
+    runs, rows = cfg["mock"]["sensitivity"]["runs"], []
+    for measure in SENSITIVITY_MEASURES:
+        for size in sensitivity_sizes(cfg, measure):
+            hits = [primary_excludes_zero_v3(dialogues_v3(make_dataset(measure, size, run)), cfg, measure)
+                    for run in range(runs)]
+            rows.append({"measure": measure, "size": size, "runs": runs, "share_excluding_zero": float(np.mean(hits))})
+    return pd.DataFrame(rows)
+
+
+def smallest_detectable_v3(table, power):
+    """Measure -> smallest planted size detected in at least `power` of runs (NaN if none)."""
+    return {m: smallest_detectable(t.rename(columns={"size": "diff"}), power) for m, t in table.groupby("measure")}
