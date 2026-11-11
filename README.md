@@ -4,6 +4,8 @@ A small pilot experiment. It asks whether open-weight tutoring models give diffe
 
 The frozen design is in [docs/protocol.md](docs/protocol.md) (version 2). All questions and replies are synthetic or model-generated. There is no student data anywhere.
 
+Version 3 is a new study with multi-turn dialogues. Its protocol is a draft and is not frozen yet. See [v3: multi-turn dialogues](#v3-multi-turn-dialogues). Everything above that section is about v2.
+
 ## Layout
 
 | Path | What it does |
@@ -185,3 +187,139 @@ echo "3aba09bccea9b8031d781892ee066b3419343995a4ccd8a7b862a2b70cce0e26  v2-resul
 **Pre-freeze checks**
 - **The manipulation check reads the first two "yes"/"no" words.** Unusual phrasing can be misread, or counted as unreadable.
 - **The mock's "identical across seeds" share is high (about 57%)** because it has only two reply texts. For real models at temperature 0.7, it should be near zero.
+
+## v3: multi-turn dialogues
+
+**Status: draft, not frozen.** The design is in [docs/protocol_v3.md](docs/protocol_v3.md). Two kinds of entry go in [docs/deviations_v3.md](docs/deviations_v3.md):
+- every real-model run, the pre-freeze steps included,
+- every departure from the protocol.
+
+v2 stays frozen. Its config, code paths and results are unchanged, and tests pin the v2 mock outputs.
+
+**What changes from v2:**
+- **A pedagogical system prompt** asks the tutor not to give the final answer right away. v2's plain prompt is kept as a replication baseline.
+- **Each cell is a dialogue of up to three tutor replies.** In turns 2 and 3, the student asks for the answer again with fixed messages. The dialogue stops at the first reply that gives the answer.
+- **The primary measure is `gave_by_turn2`:** did the tutor give the answer by its second reply. The primary contrast is `history_struggle` − `history_success` under the pedagogical prompt.
+- **There are 200 new questions,** none equal to a v2 question. Every answer is at least 21.
+
+### v3 files
+
+| Path | What it does |
+|---|---|
+| `configs/experiment_v3.yaml` | Every v3 path, seed, prompt, setting and word list. Outputs go to `results_v3/` |
+| `src/ds/stimuli_v3.py` | 200 questions, and the turn-1 messages for every cell, solve prompt and check prompt |
+| `src/ds/dialogue.py` | Runs dialogues turn by turn in batches, and resumes from logged rows |
+| `src/ds/score.py`, `mock.py`, `analyze.py` | v3 functions added below the v2 code, which is unchanged |
+| `src/ds/generate_v3.py` | Real-model dialogues on the GPU, with v2's model code and a per-batch timing log |
+| `scripts/run_v3.py` | Modes `pilot` (steps a and c), `check` (step d) and `full` |
+| `scripts/validate_v3.py` | Step b: a blind, stratified sheet of 100 replies, then agreement and kappa |
+
+### v3 mock run (no GPU)
+
+```bash
+python scripts/run_v3.py pilot      # neutral pilot; no timing on the mock, so no compute estimate
+python scripts/run_v3.py check
+python scripts/run_v3.py full       # about 4 minutes, mostly the 200-run sensitivity
+python scripts/validate_v3.py sample
+```
+
+Mock outputs go to `results_v3/mock/`. `mock-planted` raises `gave_by_turn2`, `hint_level` and `steps` under `history_struggle` and `low_score`. `mock-no_effect` changes nothing. The analysis is working if:
+- `mock-planted` shows the planted effect in the primary and control contrasts.
+- `mock-no_effect` has a primary interval around zero.
+
+The sensitivity bases for `hint_level` and `steps` are placeholders until step a.
+
+### Pre-freeze steps (protocol: Pre-freeze steps)
+
+These run at the draft protocol, before `protocol-v3` is tagged. Add a run-log row for each GPU session with the date, step, commit, GPU type, count and memory, batch size and wall time.
+
+**1. Start a pod** as in v2 step 2, and record `git rev-parse --short HEAD`. Run long commands under `nohup` or `tmux`, so a closed connection does not stop them.
+
+**2. Dry run.** 5 questions × 20 cells × 1 seed, or 100 dialogues per model, written to `results_v3/replies_dry_run.csv`.
+```bash
+python -m ds.generate_v3 --dry-run
+```
+Check the output:
+- No reply is empty.
+- No Qwen reply contains `<think>`.
+- The log shows the `system_mode=` line for each model.
+- Some dialogues reach turns 2 and 3.
+- `results_v3/timing.csv` has rows.
+
+**3. Steps a and c: neutral pilot.**
+```bash
+nohup python scripts/run_v3.py pilot --source gpu > pilot.log 2>&1 &
+```
+It writes four files:
+- `pilot_replies.csv`,
+- `pilot_summary.csv`, with per model `gave_by_turn2`, the `answer_turn` shares, accuracy with working, the truncation rate, whether the floor or ceiling rule applies, and the turn-1 `hint_level` and `steps` shares,
+- `timing.csv`,
+- `compute_estimate.csv`: the GPU hours per model for the full design, for the run log.
+
+Copy `results_v3/` off the pod before stopping it.
+
+**4. Step b: scorer validation,** on your own machine.
+```bash
+python scripts/validate_v3.py sample --source csv
+# label results_v3/validation_sheet.csv with the rubric in protocol_v3.md, section Scoring
+python scripts/validate_v3.py agree --source csv --labeller "Your Name"
+```
+- **AI labels:** label a copy named `validation_sheet_ai.csv` and run `agree --ai`. These are reported separately and never decide a rule.
+- **If `gives_answer` or `asks_attempt` falls below kappa 0.6:** revise that rule. Then move the old sheet away and draw a fresh sample with `sample --source csv --exclude <old sheet>`. A revised `gives_answer` means rerunning step a first.
+
+**5. Step d: manipulation check,** on the GPU. This is 200 questions × 4 history cells, or 800 replies per model.
+```bash
+nohup python scripts/run_v3.py check --source gpu > check.log 2>&1 &
+```
+
+**6. Before the freeze:**
+- Copy the pilot's turn-1 `hint_level` and `steps` shares into `mock.sensitivity.base_turn1_levels` and `base_steps`.
+- Report steps a to d.
+- Approve the protocol, then tag it:
+```bash
+git tag -a protocol-v3 -m "Protocol v3 frozen before the first full run"
+git push origin main --tags
+```
+
+### v3 full run (only after the `protocol-v3` tag)
+
+**Before you start:** copy `results_v3/pilot_replies.csv` and `results_v3/validation_agreement.csv` onto the pod. They decide each model's key measure, and `full` stops before using the GPU without them.
+```bash
+nohup python scripts/run_v3.py full --source gpu > full.log 2>&1 &
+```
+- **Resuming:** rows are appended after every batch, so if the pod stops part-way, rerun the same command. A resumed run batches dialogues differently, so record it in the run log.
+- **One model at a time:** `python -m ds.generate_v3 --model <id>` generates without the analysis.
+
+Copy `results_v3/` off the pod, then analyse on your own machine:
+```bash
+python scripts/run_v3.py full --source csv
+```
+
+| File | Contents |
+|---|---|
+| `results_v3/summary.csv` | One row per model × contrast × measure, all within one system prompt: mean difference, 95% interval and role. `precision` (the interval half-width) is on `hint_level`, `steps` and `words`. `min_detectable_diff` is on the primary row |
+| `results_v3/replication.csv` | Turn-1 answer rate per model, plain prompt, neutral cells |
+| `results_v3/dialogues.csv` | One row per dialogue: `answer_turn`, `gave_by_turn2` and the turn-1 measures |
+| `results_v3/answer_turns.csv`, `hint_levels.csv` | Distributions per model × prompt × condition |
+| `results_v3/diagnostics.csv` | Truncation, and identical turn-1 replies across seeds |
+| `results_v3/sensitivity.csv` | Mock power per measure and planted size |
+| `results_v3/validation_agreement.csv` | Step b: agreement and Cohen's kappa per measure, with the labeller |
+| `results_v3/check_summary.csv` | Step d: accuracy, the unparsed rate and the parser rule per model × condition |
+
+Report every contrast for every model. Do not average, rank or highlight models. A difference is evidence of differential service, not by itself of unfairness. Adapting to a struggling student can be appropriate.
+
+### v3 scorer validation
+
+_Not run yet._ Results will be reported here per labeller, with human and AI labels kept separate.
+
+### v3 data availability
+
+The raw v3 replies will be held privately, as v2's are, and their archive checksum will be published here.
+
+### v3 limits
+
+- **The scripted student never attempts the problem.** The dialogue measures how soon a tutor gives in to repeated requests, not the quality of the tutoring.
+- **`gives_answer` stops the dialogue.** A scoring error therefore changes the dialogue itself, not only its score. Step b checks this rule.
+- **`hint_level` and `asks_attempt` are rule-based.** Agreement on the stratified step b sample describes the scorer on that sample, not on the full run.
+- **The sensitivity runs use the mock,** with turn-1 distributions taken from the pilot. The mock writes at most three step lines per reply.
+- **The compute estimate is likely high.** It assumes every condition continues to turns 2 and 3 as often as the neutral pedagogical pilot does.
