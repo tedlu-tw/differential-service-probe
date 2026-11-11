@@ -11,6 +11,7 @@ paths:
     hint_levels_csv: results_v3/hint_levels.csv      # turn-1 hint_level distribution, same grouping
     diagnostics_csv: results_v3/diagnostics.csv      # truncation and seed identity
     sensitivity_csv: results_v3/sensitivity.csv
+    replication_csv: results_v3/replication.csv      # plain-prompt neutral turn-1 answer rate per model
     dry_run_csv: results_v3/replies_dry_run.csv
     pilot_csv: results_v3/pilot_replies.csv          # step a: neutral dialogues and solve replies
     pilot_summary_csv: results_v3/pilot_summary.csv
