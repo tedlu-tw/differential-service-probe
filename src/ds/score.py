@@ -202,12 +202,21 @@ def score_reply_v3(reply, question_text, answer, scoring, ignore):
             "mentions_history": mentions_history(normalise(reply), scoring["history_phrases"])}
 
 
-def score_rows_v3(rows, questions, scoring, ignore):
-    """Add the v3 measures to every tutor-reply row. Only the reply and the question reach the scorer."""
-    by_id = {q["id"]: q for q in questions}
-    return [{**row, **score_reply_v3(row["reply"], by_id[row["question_id"]]["text"],
-                                     by_id[row["question_id"]]["answer"], scoring, ignore)}
-            for row in rows]
+def score_rows_v3(rows, questions, scoring, ignore, cache=None):
+    """Add the v3 measures to every tutor-reply row. Only the reply and the question reach the scorer.
+
+    cache: an optional dict kept by the caller across calls with the same scoring and ignore list.
+    An identical reply to the same question gets identical scores, so each is scored once; mock
+    runs repeat about 3,600 texts, which keeps the 1,800 sensitivity datasets quick.
+    """
+    by_id, cache, out = {q["id"]: q for q in questions}, {} if cache is None else cache, []
+    for row in rows:
+        key = (row["question_id"], row["reply"])
+        if key not in cache:
+            q = by_id[row["question_id"]]
+            cache[key] = score_reply_v3(row["reply"], q["text"], q["answer"], scoring, ignore)
+        out.append({**row, **cache[key]})
+    return out
 
 
 # ---------- accuracy with working ----------

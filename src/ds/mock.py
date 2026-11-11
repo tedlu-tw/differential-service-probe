@@ -247,10 +247,13 @@ def sensitivity_params(cfg, measure, size):
     return {"default": default, cfg["analysis"]["primary"]["a"]: planted}
 
 
-def sensitivity_rows_v3(cells, questions, cfg, measure, size, run):
-    """One simulated dataset of the primary contrast, every tutor reply scored like a real one."""
+def sensitivity_rows_v3(cells, questions, cfg, measure, size, run, cache=None):
+    """One simulated dataset of the primary contrast, every tutor reply scored like a real one.
+
+    cache: passed to score_rows_v3, so the same mock texts are scored once across all runs.
+    """
     primary = cfg["analysis"]["primary"]
     keep = [c for c in cells if c["prompt"] == primary["prompt"] and c["condition"] in (primary["a"], primary["b"])]
     rows = run_mock_dialogues(keep, questions, cfg, sensitivity_params(cfg, measure, size),
                               f"mock-{measure}-{size}", cfg["seeds"]["generation"], run)
-    return score_rows_v3(rows, questions, cfg["scoring"], hint_ignore_numbers(cfg))
+    return score_rows_v3(rows, questions, cfg["scoring"], hint_ignore_numbers(cfg), cache)

@@ -159,3 +159,12 @@ def test_score_check_v3(reply, expected, result, rule, parser):
 def test_correct_is_not_read_inside_incorrect(parser):
     out = score_check_v3("Your first answer is incorrect, and your second answer is incorrect.", "no", parser)
     assert (out["parsed"], out["item1_correct"], out["item2_correct"]) == (1, 1, 1)
+
+
+def test_score_cache_gives_same_scores(scoring):
+    questions = [{"id": "q", "text": JACKET, "answer": ANSWER}]
+    rows = [{"question_id": "q", "reply": r} for r in ("55% of 140 is 77.", "Great job!", "55% of 140 is 77.")]
+    cache = {}
+    first = score_rows_v3(rows, questions, scoring, IGNORE, cache)
+    assert first == score_rows_v3(rows, questions, scoring, IGNORE) == score_rows_v3(rows, questions, scoring, IGNORE, cache)
+    assert len(cache) == 2
