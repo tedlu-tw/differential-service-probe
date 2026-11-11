@@ -17,6 +17,7 @@ paths:
     validate_csv: results_v3/validation_sheet.csv    # step b: 100 replies to label, scorer labels hidden
     validate_agreement_csv: results_v3/validation_agreement.csv
     validate_disagreements_csv: results_v3/validation_disagreements.csv
+    timing_csv: results_v3/timing.csv                # seconds per GPU batch, every real run (for step c)
     compute_estimate_csv: results_v3/compute_estimate.csv   # step c
     check_csv: results_v3/check_replies.csv          # step d
     check_summary_csv: results_v3/check_summary.csv
