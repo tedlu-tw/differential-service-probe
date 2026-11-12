@@ -115,7 +115,9 @@ def dialogue_rng(cfg, state, run):
 def dialogue_plan(state, params, cfg, run):
     p = params.get(state["condition"], params["default"])
     rng = dialogue_rng(cfg, state, run)
-    level, steps, later = int(rng.choice(4, p=p["turn1_levels"])), int(rng.choice(4, p=p["steps"])), rng.random(2)
+    level = int(rng.choice(4, p=p["turn1_levels"]))
+    steps = int(rng.choice(len(p["steps"]), p=p["steps"]))   # any length: real tutors number up to ten steps
+    later = rng.random(2)
     if level == 3:
         answer_turn = 1
     elif later[0] < p["later_give_in"][0]:

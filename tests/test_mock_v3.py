@@ -148,6 +148,18 @@ def test_mean_shift_planted_exactly(cfg, measure, key, size):
     assert mean_of(params["history_struggle"][key]) - mean_of(params["default"][key]) == pytest.approx(size)
 
 
+def test_steps_beyond_three(cfg, questions, cells):
+    """Real tutors number up to ten steps (pilot): the mock plans and the scorer reads any count."""
+    long_steps = [0.42, 0.0, 0.09, 0.20, 0.17, 0.04, 0.06, 0.0, 0.01, 0.0, 0.01]
+    params = {"default": {**v3_setting(cfg, "no_effect")["default"], "steps": long_steps}}
+    rows = run_mock_dialogues(cells[:400], questions, cfg, params, "mock-long", [0])
+    first = scored(rows, questions, cfg).query("turn == 1")
+    assert first.steps.max() > 3
+    for row in first.itertuples():
+        assert row.steps == dialogue_plan(row._asdict(), params, cfg, run=0)["steps"]
+    assert mean_of(shift_up(long_steps, 0.4)) - mean_of(long_steps) == pytest.approx(0.4)
+
+
 def test_shift_too_large_refused():
     with pytest.raises(ValueError):
         shift_up([0.0, 0.0, 0.1, 0.9], 0.4)
