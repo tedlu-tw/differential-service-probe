@@ -102,6 +102,14 @@ def test_dry_run_questions_cover_families(cfg, questions):
     assert len(picked) == 5 and {q["family"] for q in picked} == {"two_step", "percentage", "linear_equation", "rate"}
 
 
+def test_progress_bar_counts_dialogues():
+    from ds.generate_v3 import progress_bar
+    bar = progress_bar("org/Model-8B", "pilot", 0)(2, 10)
+    bar.update(8)
+    assert bar.n == 8 and bar.total == 10 and bar.desc.startswith("Model-8B pilot seed=0 turn=2")
+    bar.close()
+
+
 def test_timing_rows():
     batch = [{"seed": 1, "turn": 2}] * 3
     assert timing_rows("m", "pilot", batch, 1.23456) == [{"run": "pilot", "model": "m", "seed": 1, "turn": 2,

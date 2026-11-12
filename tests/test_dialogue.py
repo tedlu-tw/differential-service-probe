@@ -155,6 +155,36 @@ def test_resume_after_interrupt(cells, answers, cfg):
     assert run(cells, answers, cfg, done_rows=full) == []      # nothing left to do
 
 
+class FakeBar:
+    def __init__(self, turn, total, bars):
+        self.turn, self.total, self.done, self.closed = turn, total, 0, False
+        bars.append(self)
+
+    def update(self, n):
+        self.done += n
+
+    def close(self):
+        self.closed = True
+
+
+def test_progress_one_bar_per_turn(cells, answers, cfg):
+    bars = []
+    rows = run(cells, answers, cfg, progress=lambda turn, total: FakeBar(turn, total, bars))
+    per_turn = Counter(r["turn"] for r in rows)
+    assert [(b.turn, b.total) for b in bars] == sorted(per_turn.items())
+    assert all(b.done == b.total and b.closed for b in bars)
+    assert rows == run(cells, answers, cfg)                       # display only: the same rows without it
+
+
+def test_progress_counts_only_this_turn_and_what_is_left(cells, answers, cfg):
+    """Resumed mid-turn, dialogues wait at turns 1 and 2: the first bar counts the turn-1 ones only."""
+    full, bars = run(cells, answers, cfg), []
+    done = [r for r in full if r["turn"] == 1][:10]
+    run(cells, answers, cfg, done_rows=done, progress=lambda turn, total: FakeBar(turn, total, bars))
+    n_turn = Counter(r["turn"] for r in full)
+    assert [(b.turn, b.total) for b in bars][:2] == [(1, n_turn[1] - 10), (2, n_turn[2])]
+
+
 def test_other_seed_not_treated_as_done(cells, answers, cfg):
     seed0 = run(cells, answers, cfg, seed=0)
     assert len(run(cells, answers, cfg, seed=1, done_rows=seed0)) == len(seed0)

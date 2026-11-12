@@ -87,22 +87,29 @@ def gpu_parts(spec, cfg):
     return mode, prepare, render, generate
 
 
+def progress_bar(model_id, run, seed):
+    """One tqdm bar per turn, counting dialogues. tqdm comes with transformers, so it is imported here only."""
+    from tqdm import tqdm
+    name = model_id.split("/")[-1]
+    return lambda turn, total: tqdm(total=total, desc=f"{name} {run} seed={seed} turn={turn}", unit="dialogue")
+
+
 def run_model_v3(spec, cells, seeds, answers, cfg, out_path, run):
     from ds import generate as g
     mode, prepare, render, generate = gpu_parts(spec, cfg)
     print(f"{spec['id']} system_mode={mode}", flush=True)
 
     def log_timing(batch, seconds):
+        # Seconds per batch go to the timing log (step c); the bar shows progress on screen.
         append_rows(cfg["paths"]["timing_csv"], timing_rows(spec["id"], run, batch, seconds))
-        print(f"{spec['id']} {run} seed={batch[0]['seed']} turn={batch[0]['turn']} "
-              f"n={len(batch)} {seconds:.1f}s", flush=True)
 
     fn = make_reply_fn(prepare, render, generate, log_timing)
     for seed in seeds:
         g.set_seed(seed)
         run_dialogues(cells, seed, fn, answers, cfg, done_rows=load_done_rows(out_path, spec["id"]),
                       on_rows=lambda rows: append_rows(out_path, rows),
-                      extra={"model": spec["id"], "system_mode": mode})
+                      extra={"model": spec["id"], "system_mode": mode},
+                      progress=progress_bar(spec["id"], run, seed))
 
 
 def generate_on_gpu(cells, answers, cfg, seeds, out_path, run, model_id=None):

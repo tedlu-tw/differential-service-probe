@@ -74,12 +74,14 @@ def reply_rows(batch, outputs, answers, extra):
             for s, (reply, truncated) in zip(batch, outputs)]
 
 
-def run_dialogues(cells, seed, reply_fn, answers, cfg, done_rows=(), on_rows=None, extra=None):
+def run_dialogues(cells, seed, reply_fn, answers, cfg, done_rows=(), on_rows=None, extra=None, progress=None):
     """Run every dialogue of one seed to its end and return the new rows.
 
     done_rows: rows already logged for this model (any seed); finished turns are not redone.
     on_rows: called after every batch, e.g. to append to the CSV, so a stopped run loses one batch.
     extra: fields added to every row, e.g. the model id and system_mode.
+    progress: progress(turn, n_dialogues) at the start of each turn, returning an object with
+        update(n) and close(), e.g. a tqdm bar. Display only; it never changes a reply.
     """
     check_design(cfg)
     rows, new, size = list(done_rows), [], cfg["generation"]["batch_size"]
@@ -89,6 +91,7 @@ def run_dialogues(cells, seed, reply_fn, answers, cfg, done_rows=(), on_rows=Non
             return new
         turn = min(s["turn"] for s in states)
         todo = by_length([s for s in states if s["turn"] == turn])
+        bar = progress(turn, len(todo)) if progress else None
         for i in range(0, len(todo), size):
             batch = todo[i:i + size]
             batch_rows = reply_rows(batch, reply_fn(batch), answers, extra or {})
@@ -96,3 +99,7 @@ def run_dialogues(cells, seed, reply_fn, answers, cfg, done_rows=(), on_rows=Non
             new += batch_rows
             if on_rows:
                 on_rows(batch_rows)
+            if bar:
+                bar.update(len(batch))
+        if bar:
+            bar.close()
