@@ -1,6 +1,6 @@
 # Protocol: Differential-Service Probe (version 3)
 
-**Status: draft, not frozen.** Tag `protocol-v3` before the first real v3 model run. After that run, any change to the rubric, the cues, the system prompts, the dialogue script, the primary contrast or the exclusion rules must be reported as a deviation in `docs/deviations_v3.md`.
+**Status: frozen (tag `protocol-v3`), 2026-11-12, after pre-freeze steps a to d.** Those steps ran real models at the draft. This version is tagged before the first full v3 run. After the tag, any change to the rubric, the cues, the system prompts, the dialogue script, the primary contrast or the exclusion rules must be reported as a deviation in `docs/deviations_v3.md`. Changes made before the tag are recorded there too.
 
 v3 is a new study. v2 (`docs/protocol.md`, tag `v2-results`) stays frozen. Its config, code paths and scoring are not changed, and its data are not reanalysed under v3 rules.
 
@@ -194,5 +194,5 @@ Every real-model run is recorded in `docs/deviations_v3.md` with the date, the h
 - **Steps a to d** are done and reported, and `docs/deviations_v3.md` is up to date.
 - **This protocol** is approved by the author, and `protocol-v3` is tagged.
 
-## Not allowed after the first real run
+## Not allowed after the freeze
 Changing the rubric, the cues, the system prompts, the dialogue script, the primary contrast or the exclusion rules. Any change must be reported as a deviation.

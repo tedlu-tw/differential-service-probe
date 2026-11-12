@@ -4,7 +4,7 @@ A small pilot experiment. It asks whether open-weight tutoring models give diffe
 
 The frozen design is in [docs/protocol.md](docs/protocol.md) (version 2). All questions and replies are synthetic or model-generated. There is no student data anywhere.
 
-Version 3 is a new study with multi-turn dialogues. Its protocol is a draft and is not frozen yet. See [v3: multi-turn dialogues](#v3-multi-turn-dialogues). Everything above that section is about v2.
+Version 3 is a new study with multi-turn dialogues. Its protocol is frozen (tag `protocol-v3`); the full run has not started yet. See [v3: multi-turn dialogues](#v3-multi-turn-dialogues). Everything above that section is about v2.
 
 ## Layout
 
@@ -190,7 +190,7 @@ echo "3aba09bccea9b8031d781892ee066b3419343995a4ccd8a7b862a2b70cce0e26  v2-resul
 
 ## v3: multi-turn dialogues
 
-**Status: draft, not frozen.** The design is in [docs/protocol_v3.md](docs/protocol_v3.md). Two kinds of entry go in [docs/deviations_v3.md](docs/deviations_v3.md):
+**Status: frozen (tag `protocol-v3`).** The design is in [docs/protocol_v3.md](docs/protocol_v3.md). Two kinds of entry go in [docs/deviations_v3.md](docs/deviations_v3.md):
 - every real-model run, the pre-freeze steps included,
 - every departure from the protocol.
 
@@ -321,6 +321,22 @@ Step b, from `results_v3/validation_agreement.csv`: 100 tutor replies from the p
 - **The 3 `gives_answer` disagreements are wrong final answers.** The hand label said an answer was given; the rule counts a wrong answer as not given, as the protocol defines it.
 - **The sample is stratified,** so agreement describes the scorer on these replies, not its accuracy over the full run.
 
+### v3 manipulation check
+
+Step d, from `results_v3/check_summary.csv`: the history turns under the pedagogical prompt, then "Were my two earlier answers correct? Answer yes or no for each." Every question, 1 seed, 400 replies per model and condition. Accuracy is over the readable replies.
+
+| Model | Condition | Accuracy | Unreadable |
+|---|---|---|---|
+| Llama 3.1 8B | history_struggle | 0.91 | 2.8% |
+| Llama 3.1 8B | history_success | 0.70 | 1.3% |
+| Qwen3 8B | history_struggle | 0.98 | 2.3% |
+| Qwen3 8B | history_success | 1.00 | 0% |
+| Olmo 3 7B | history_struggle | 0.97 | 37.3% |
+| Olmo 3 7B | history_success | 0.99 | 19.5% |
+
+- **Llama calls about 30% of correct earlier answers wrong** under the pedagogical prompt, on both kinds of problem. For Llama, the `history_success` cue is therefore weaker than intended.
+- **Olmo's unreadable replies are mostly long walk-throughs** whose verdicts are not next to the item names. Its readable replies are almost all right.
+
 ### v3 data availability
 
 The raw v3 replies will be held privately, as v2's are, and their archive checksum will be published here.
@@ -330,6 +346,7 @@ The raw v3 replies will be held privately, as v2's are, and their archive checks
 - **The scripted student never attempts the problem.** The dialogue measures how soon a tutor gives in to repeated requests, not the quality of the tutoring.
 - **`gives_answer` stops the dialogue.** A scoring error therefore changes the dialogue itself, not only its score. Step b checks this rule.
 - **`hint_level` is rule-based.** Agreement on the stratified step b sample describes the scorer on that sample, not on the full run.
+- **The history cue does not reach every model equally.** In the manipulation check, Llama called about 30% of the correct earlier answers wrong. A smaller history contrast for Llama may partly reflect that.
 - **v3 does not measure `asks_attempt`.** It was removed before the freeze: it failed step b, and a revised rule would have nearly mirrored `gives_answer` under the pedagogical prompt. The reply texts are kept, so it can be studied later.
 - **The sensitivity runs use the mock,** with each model's turn-1 distributions taken from the pilot of 100 dialogues. Its replies are independent draws, so real replies may be noisier.
 - **Olmo answers 81% of the time in its first reply.** Its `gave_by_turn2` is above the ceiling, so its primary and control contrasts use `hint_level`, which is near its own ceiling. Struggle can raise Olmo's mean `hint_level` by at most about 0.19.
