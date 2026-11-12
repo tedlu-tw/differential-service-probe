@@ -58,7 +58,7 @@ def pick(summary, model, contrast, measure):
 def reply(turn, gives, **kw):
     base = {"model": "m", "question_id": "q1", "prompt": "pedagogical", "condition": "neutral", "phrasing": "A",
             "seed": 0, "turn": turn, "reply": f"r{turn}", "truncated": False, "gives_answer": gives, "hint_level": 1,
-            "steps": 2, "praises": 0, "encourages": 0, "asks_attempt": 1, "words": 10, "mentions_history": 0}
+            "steps": 2, "praises": 0, "encourages": 0, "words": 10, "mentions_history": 0}
     return {**base, **kw}
 
 

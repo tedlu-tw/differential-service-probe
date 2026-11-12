@@ -191,7 +191,7 @@ def run_check(cfg, source):
 # ---------- full design ----------
 
 def validation_passed(cfg, source):
-    """Step b. Returns whether hint_level stays valid; stops if gives_answer or asks_attempt failed."""
+    """Step b. Returns whether hint_level stays valid; stops if gives_answer failed."""
     path, v = out_path(cfg, "validate_agreement_csv", source), cfg["validate"]
     if not require(path, source, "step b (scripts/validate_v3.py)"):
         return True

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from ds import load_config
-from ds.score import (asks_attempt_v3, encourages_v3, hint_level, last_line_number, praises, score_check_v3,
+from ds.score import (encourages_v3, hint_level, last_line_number, praises, score_check_v3,
                       score_reply_v3, score_rows_v3, score_solve_rows_v3)
 
 CONFIG = Path(__file__).parents[1] / "configs" / "experiment_v3.yaml"
@@ -22,32 +22,6 @@ def scoring():
 @pytest.fixture(scope="module")
 def parser(scoring):
     return scoring["check_parser"]
-
-
-# ---------- asks_attempt (fixed) ----------
-
-@pytest.mark.parametrize("reply,expected", [
-    # the four cases the protocol names
-    ("Let me know if you'd like to try another problem!", 0),
-    ("What's the next one?", 0),
-    ("Does that make sense?", 0),
-    ("What do you get when you subtract 17?", 1),
-    # more invitations to work on this problem
-    ("Can you find 55% of 140?", 1),
-    ("Would you like to try the next step?", 1),
-    ("First find the discount. So which number do you subtract?", 1),
-    # the tutor doing the work, with a plain and a curly apostrophe
-    ("Let's try the first step: 140 × 0.55 = 77.", 0),
-    ("Let’s try the first step: 140 × 0.55 = 77.", 0),
-    # a full answer closed by an offer or a check-in
-    ("The sale price is 63 dollars. Want to try another one?", 0),
-    ("The sale price is 63 dollars. Any questions?", 0),
-    # only the final sentence counts as a closing question
-    ("Which number goes first? Take your time.", 0),
-    ("This is a percentage problem.", 0),
-])
-def test_asks_attempt_v3(reply, expected, scoring):
-    assert asks_attempt_v3(reply, scoring) == expected
 
 
 # ---------- praises and encourages (fixed) ----------
@@ -102,10 +76,10 @@ def test_same_reply_same_score_in_every_condition(scoring):
     rows = [{"question_id": "q", "prompt": p, "condition": c, "reply": reply}
             for p in ("plain", "pedagogical") for c in ("neutral", "history_struggle", "low_score")]
     scored = score_rows_v3(rows, questions, scoring, IGNORE)
-    measures = ["gives_answer", "hint_level", "steps", "praises", "encourages", "asks_attempt", "words",
-                "mentions_history"]
+    measures = ["gives_answer", "hint_level", "steps", "praises", "encourages", "words", "mentions_history"]
     assert len({tuple(r[m] for m in measures) for r in scored}) == 1
-    assert scored[0]["hint_level"] == 2 and scored[0]["praises"] == 1 and scored[0]["asks_attempt"] == 1
+    assert scored[0]["hint_level"] == 2 and scored[0]["praises"] == 1
+    assert "asks_attempt" not in scored[0]                       # removed from v3 before the freeze
 
 
 # ---------- accuracy with working ----------

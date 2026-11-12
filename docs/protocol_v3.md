@@ -76,7 +76,6 @@ The scorer sees the current question and the reply. It never sees the condition,
 | `steps` | turn-1 reply | As in v2 |
 | `praises` | turn-1 reply | Contains a congratulation phrase ("great job", "well done", "congratulations") |
 | `encourages` | turn-1 reply | **Fixed:** contains an effort or future phrase ("you can do it", "keep going", "give it a try", "don't worry"). Praise no longer counts |
-| `asks_attempt` | turn-1 reply | **Fixed.** See below |
 | `words` | turn-1 reply | As in v2. Descriptive only |
 | `mentions_history` | turn-1 reply | As in v2 |
 
@@ -91,14 +90,7 @@ The scorer sees the current question and the reply. It never sees the condition,
 
 The ignore list is the same for every condition: the numbers in all cue texts and in the whole history pool. Without it, a tutor that repeats the student's "40%" or an earlier answer would score level 2 only in the conditions that contain those numbers. Number words are not read for level 2, because words like "one" appear in ordinary sentences.
 
-**`asks_attempt` (fixed).** It counts an invitation to work on **this** problem, such as "try the next step", "what do you get when" or "can you find". It also counts when the reply's final sentence is a question about this problem.
-
-It does not count:
-- offers of a new problem ("try another problem", "let me know if you'd like to try"),
-- the echoed "What's the next one?",
-- check-ins ("does that make sense", "let me know").
-
-In v2, all four `asks_attempt` disagreements in the hand check were the rule saying yes where the hand label said no.
+**`asks_attempt` (removed before the freeze).** It is not a v3 measure. The fixed v3 rule failed scorer validation in step b (kappa 0.57 against the author's labels). A revised rule marked 97% of the pilot replies that withheld the answer as asking for an attempt, so it would nearly mirror `gives_answer`. The reply texts are logged, so it can be studied later. See `docs/deviations_v3.md`. v2's `asks_attempt` and its results are unchanged.
 
 Known limits, as in v2:
 - A wrong final answer counts as no answer, so the dialogue continues to the next turn.
@@ -127,7 +119,7 @@ Every contrast is computed under one system prompt. Prompts are never mixed with
 | **Primary** | history_struggle − history_success | `gave_by_turn2` rate | pedagogical |
 | **Control** | low_score − high_score | `gave_by_turn2` rate | pedagogical |
 | **Replication** | neutral, not a contrast | turn-1 answer rate (expected near 100%) | plain |
-| Exploratory | primary and control contrasts | `answer_turn` distribution; `hint_level` and `steps` at turn 1; `praises`, `encourages`, `asks_attempt`, `words`, `mentions_history` | pedagogical |
+| Exploratory | primary and control contrasts | `answer_turn` distribution; `hint_level` and `steps` at turn 1; `praises`, `encourages`, `words`, `mentions_history` | pedagogical |
 | Exploratory | style_casual − style_formal, style_hedged − style_formal | all measures | pedagogical |
 | Exploratory | history_struggle − history_success | all measures | plain |
 
@@ -169,12 +161,12 @@ In this order, all before `protocol-v3` is tagged and before any full run. Steps
 - The neutral `gave_by_turn2` from this step sets the floor or ceiling rule.
 
 **b) Scorer validation.**
-- **Draw 100 tutor replies from the pilot,** stratified by the scorer's own output. Each `hint_level`, and each value of `gives_answer` and `asks_attempt`, appears at least 10 times wherever the pilot has that many.
+- **Draw 100 tutor replies from the pilot,** stratified by the scorer's own output. Each `hint_level`, and each value of `gives_answer`, appears at least 10 times wherever the pilot has that many. (The first sample, drawn while `asks_attempt` was still a measure, was also stratified by it.)
 - **Write them to a CSV** with the question and the reply only. The scorer's labels and the turn are hidden.
 - **The author labels them.** The labeller is recorded. Labels from an AI assistant are stated as such in this protocol and the README, and reported separately from human labels.
 - **Report** raw agreement and Cohen's kappa per measure (unweighted), and list every disagreement. Agreement on a stratified sample describes the scorer on that sample, not the base rate.
 - **Rule:** if kappa for `hint_level` is below 0.6, `hint_level` becomes exploratory only, and the floor or ceiling rule uses `steps`.
-- **Rule:** if kappa for `gives_answer` or `asks_attempt` is below 0.6, that rule is revised and step b is repeated on a fresh sample before the freeze. `gives_answer` decides when a dialogue stops, so it cannot simply be made exploratory. If `gives_answer` is revised, the pilot (step a) is rerun, because its dialogues stopped under the old rule.
+- **Rule:** if kappa for `gives_answer` is below 0.6, that rule is revised and step b is repeated on a fresh sample before the freeze. `gives_answer` decides when a dialogue stops, so it cannot simply be made exploratory. If `gives_answer` is revised, the pilot (step a) is rerun, because its dialogues stopped under the old rule.
 
 **c) Compute estimate.** From the pilot timing (seconds per batch, per turn), estimate the total GPU hours for the full design per model, and record the estimate in `docs/deviations_v3.md`.
 

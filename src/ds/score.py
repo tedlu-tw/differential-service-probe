@@ -134,25 +134,6 @@ def encourages_v3(reply, scoring):
     return int(has_phrase(normalise(reply), scoring["encourage_phrases"]))
 
 
-def excluded_sentence(sentence, attempt):
-    return has_phrase(sentence, attempt["offer_phrases"] + attempt["checkin_phrases"]
-                      + attempt["tutor_does_phrases"])
-
-
-def asks_attempt_v3(reply, scoring):
-    """An invitation to work on this problem, or a closing question about it.
-
-    Offers of a new problem, the echoed "What's the next one?", check-ins and the tutor's own
-    "Let's try..." never count, wherever they appear.
-    """
-    attempt, parts = scoring["attempt"], sentences(normalise(reply))
-    kept = [s for s in parts if not excluded_sentence(s, attempt)]
-    invited = any(has_phrase(s, attempt["invite_phrases"]) for s in kept)
-    tail = parts[-attempt["tail_sentences"]:] if parts else []
-    asks_last = any("?" in s and not excluded_sentence(s, attempt) for s in tail)
-    return int(invited or asks_last)
-
-
 # ---------- hint_level ----------
 
 LIST_MARKER = re.compile(r"^\s*[*#_>]*\s*\d+[.)](?!\d)", re.MULTILINE)
@@ -191,13 +172,12 @@ def hint_level(reply, question_text, answer, scoring, ignore):
 
 
 def score_reply_v3(reply, question_text, answer, scoring, ignore):
-    """All turn-level v3 measures for one tutor reply."""
+    """All turn-level v3 measures for one tutor reply. asks_attempt was removed before the freeze (deviations_v3.md)."""
     return {"gives_answer": gives_answer(reply, answer),
             "hint_level": hint_level(reply, question_text, answer, scoring, ignore),
             "steps": count_steps(reply),
             "praises": praises(reply, scoring),
             "encourages": encourages_v3(reply, scoring),
-            "asks_attempt": asks_attempt_v3(reply, scoring),
             "words": len(reply.split()),
             "mentions_history": mentions_history(normalise(reply), scoring["history_phrases"])}
 

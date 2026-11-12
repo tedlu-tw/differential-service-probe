@@ -135,9 +135,11 @@ def test_validation_passed(tmp_path):
     assert run_v3.validation_passed(cfg, "csv") is True
     write_agreement(cfg, {"hint_level": 0.5, "gives_answer": 0.9, "asks_attempt": 0.8})
     assert run_v3.validation_passed(cfg, "csv") is False               # hint_level becomes exploratory
-    for failed in ({"hint_level": 0.9, "gives_answer": 0.5, "asks_attempt": 0.8},
-                   {"hint_level": 0.9, "gives_answer": 0.9, "asks_attempt": float("nan")},
-                   {"hint_level": 0.9, "gives_answer": 0.9}):
+    write_agreement(cfg, {"hint_level": 0.9, "gives_answer": 0.9, "asks_attempt": 0.57})
+    assert run_v3.validation_passed(cfg, "csv") is True                # asks_attempt is no longer a measure
+    for failed in ({"hint_level": 0.9, "gives_answer": 0.5},
+                   {"hint_level": 0.9, "gives_answer": float("nan")},
+                   {"hint_level": 0.9}):
         write_agreement(cfg, failed)
         with pytest.raises(SystemExit, match="step b failed"):
             run_v3.validation_passed(cfg, "csv")

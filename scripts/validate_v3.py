@@ -6,7 +6,7 @@ From the repo root, with PYTHONPATH=src, after scripts/run_v3.py pilot:
         them to paths.validate_csv with empty label columns. The sheet shows the question and the
         reply only: no model, condition, turn or scorer label. --exclude leaves out every reply in
         an earlier sheet, for the fresh sample after a rule is revised.
-    Fill label_hint_level (0 to 3), label_gives_answer and label_asks_attempt (0 or 1), then:
+    Fill label_hint_level (0 to 3) and label_gives_answer (0 or 1), then:
     python scripts/validate_v3.py agree --labeller NAME [--ai] [--source mock|csv]
         Writes raw agreement and Cohen's kappa per measure, and every disagreement.
 
@@ -27,7 +27,9 @@ from ds.score import score_rows_v3
 from ds.stimuli_v3 import hint_ignore_numbers, make_questions_v3
 from run_v3 import out_path, read_replies, write
 
-VALUES = {"hint_level": [0, 1, 2, 3], "gives_answer": [0, 1], "asks_attempt": [0, 1]}
+# The label columns follow validate.measures in the config. asks_attempt was removed before the freeze,
+# so a label_asks_attempt column on an older sheet is ignored.
+VALUES = {"hint_level": [0, 1, 2, 3], "gives_answer": [0, 1]}
 
 
 # ---------- files ----------

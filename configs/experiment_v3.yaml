@@ -75,9 +75,10 @@ pilot:                       # step a
 
 validate:                    # step b
     n: 100
-    min_per_stratum: 10      # each hint_level and each value of gives_answer and asks_attempt
+    min_per_stratum: 10      # each hint_level and each value of gives_answer
     kappa_min: 0.6
-    measures: [hint_level, gives_answer, asks_attempt]
+    # asks_attempt was labelled in the first sample but removed before the freeze (deviations_v3.md).
+    measures: [hint_level, gives_answer]
 
 check:                       # step d
     seed: 0
@@ -136,20 +137,6 @@ scoring:
     # Effort and future only; praise is no longer counted here.
     encourage_phrases: ["you can do it", "keep going", "give it a try", "don't worry",
                         "you've got this", "take your time"]
-
-    attempt:
-        # A sentence counts if it has an invite phrase. The last sentence also counts if it is a
-        # question. A sentence with any phrase from the three lists below never counts.
-        invite_phrases: ["try the", "try this", "try it", "try to", "try working",
-                         "what do you get", "what would you get", "what do you think",
-                         "can you find", "can you work out", "can you figure out", "can you calculate",
-                         "your turn", "give it a go"]
-        offer_phrases: ["another problem", "another one", "another question", "new problem",
-                        "next problem", "next question", "next one", "more practice", "practice problem"]
-        checkin_phrases: ["does that make sense", "does this make sense", "does that help", "does this help",
-                          "any questions", "any other questions", "anything else", "let me know"]
-        tutor_does_phrases: ["let's try", "let us try", "we can try", "we'll try", "i'll try"]
-        tail_sentences: 1
 
     hint_level:
         # Level 1 words, matched at the start of a word: "multipl" covers multiply, multiplying, multiplication.
@@ -210,7 +197,7 @@ analysis:
           a: history_struggle
           b: history_success
           prompt: plain
-    measures: [gave_by_turn2, hint_level, steps, praises, encourages, asks_attempt, words, mentions_history]
+    measures: [gave_by_turn2, hint_level, steps, praises, encourages, words, mentions_history]   # no asks_attempt
     precision_measures: [hint_level, steps, words]   # 95% interval half-width also reported
     ceiling_rule:
         floor: 0.10

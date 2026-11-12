@@ -265,7 +265,7 @@ python scripts/validate_v3.py sample --source csv
 python scripts/validate_v3.py agree --source csv --labeller "Your Name"
 ```
 - **AI labels:** label a copy named `validation_sheet_ai.csv` and run `agree --ai`. These are reported separately and never decide a rule.
-- **If `gives_answer` or `asks_attempt` falls below kappa 0.6:** revise that rule. Then move the old sheet away and draw a fresh sample with `sample --source csv --exclude <old sheet>`. A revised `gives_answer` means rerunning step a first.
+- **If `gives_answer` falls below kappa 0.6:** revise the rule and rerun step a. Then move the old sheet away and draw a fresh sample with `sample --source csv --exclude <old sheet>`.
 
 **5. Step d: manipulation check,** on the GPU. This is 200 questions × 4 history cells, or 800 replies per model.
 ```bash
@@ -310,7 +310,16 @@ Report every contrast for every model. Do not average, rank or highlight models.
 
 ### v3 scorer validation
 
-_Not run yet._ Results will be reported here per labeller, with human and AI labels kept separate.
+Step b, from `results_v3/validation_agreement.csv`: 100 tutor replies from the pilot, stratified by the scorer's own output and labelled by hand by the author (human labels; no AI labels). The labeller saw only the question and the reply.
+
+| Measure | n | Agreement | Cohen's kappa | Result |
+|---|---|---|---|---|
+| hint_level | 100 | 0.85 | 0.76 | passes |
+| gives_answer | 100 | 0.97 | 0.94 | passes |
+| asks_attempt | 100 | 0.79 | 0.57 | fails; removed from v3 |
+
+- **The 3 `gives_answer` disagreements are wrong final answers.** The hand label said an answer was given; the rule counts a wrong answer as not given, as the protocol defines it.
+- **The sample is stratified,** so agreement describes the scorer on these replies, not its accuracy over the full run.
 
 ### v3 data availability
 
@@ -320,7 +329,8 @@ The raw v3 replies will be held privately, as v2's are, and their archive checks
 
 - **The scripted student never attempts the problem.** The dialogue measures how soon a tutor gives in to repeated requests, not the quality of the tutoring.
 - **`gives_answer` stops the dialogue.** A scoring error therefore changes the dialogue itself, not only its score. Step b checks this rule.
-- **`hint_level` and `asks_attempt` are rule-based.** Agreement on the stratified step b sample describes the scorer on that sample, not on the full run.
+- **`hint_level` is rule-based.** Agreement on the stratified step b sample describes the scorer on that sample, not on the full run.
+- **v3 does not measure `asks_attempt`.** It was removed before the freeze: it failed step b, and a revised rule would have nearly mirrored `gives_answer` under the pedagogical prompt. The reply texts are kept, so it can be studied later.
 - **The sensitivity runs use the mock,** with each model's turn-1 distributions taken from the pilot of 100 dialogues. Its replies are independent draws, so real replies may be noisier.
 - **Olmo answers 81% of the time in its first reply.** Its `gave_by_turn2` is above the ceiling, so its primary and control contrasts use `hint_level`, which is near its own ceiling. Struggle can raise Olmo's mean `hint_level` by at most about 0.19.
 - **The compute estimate is likely high.** It assumes every condition continues to turns 2 and 3 as often as the neutral pedagogical pilot does.

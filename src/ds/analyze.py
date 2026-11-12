@@ -166,8 +166,7 @@ def smallest_detectable(table, power):
 # =====================================================================================
 
 DIALOGUE_KEY = ["model", "question_id", "prompt", "condition", "phrasing", "seed"]
-TURN1_MEASURES = ["gives_answer", "hint_level", "steps", "praises", "encourages", "asks_attempt", "words",
-                  "mentions_history"]
+TURN1_MEASURES = ["gives_answer", "hint_level", "steps", "praises", "encourages", "words", "mentions_history"]
 
 
 def dialogues_v3(rows):

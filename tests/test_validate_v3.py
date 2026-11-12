@@ -13,7 +13,7 @@ import run_v3  # noqa: E402
 import validate_v3 as v3  # noqa: E402
 
 CONFIG = Path(__file__).parents[1] / "configs" / "experiment_v3.yaml"
-MEASURES = ["hint_level", "gives_answer", "asks_attempt"]
+MEASURES = ["hint_level", "gives_answer"]
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ def test_sample_is_reproducible(cfg):
 
 def test_strata_are_met_beyond_random_draws():
     """A rare value is filled up to the minimum, which a plain random draw would miss."""
-    scored = pd.DataFrame({"hint_level": [2] * 12 + [0] * 988, "gives_answer": 0, "asks_attempt": 0})
+    scored = pd.DataFrame({"hint_level": [2] * 12 + [0] * 988, "gives_answer": 0})
     v = {"measures": MEASURES, "n": 100, "min_per_stratum": 10}
     ids = v3.stratified_sample(scored, v, 7)
     assert len(ids) == 100 and (scored.loc[ids, "hint_level"] == 2).sum() >= 10
@@ -103,10 +103,22 @@ def test_agree_perfect_and_with_disagreements(cfg):
     report = pd.read_csv(agreement_path).set_index("measure")
     assert report.loc["hint_level", "agreement"] == 0.6 and not report.loc["hint_level", "passes"]
     assert report.loc["hint_level", "kappa"] < 0.6                             # chance-corrected, not raw agreement
-    assert report.loc["gives_answer", "passes"] and report.loc["asks_attempt", "passes"]
+    assert report.loc["gives_answer", "passes"]
     wrong = pd.read_csv(disagreements_path, keep_default_na=False)
     assert len(wrong) == 40 and set(wrong.measure) == {"hint_level"} and (wrong.label != wrong.scorer).all()
     assert run_v3.validation_passed(cfg, "mock") is False                      # run_v3 reads this file
+
+
+def test_old_asks_attempt_column_ignored(cfg):
+    """The first sheet was labelled with asks_attempt too; agree reads the configured measures only."""
+    v3.sample(cfg, "mock")
+    sheet = label_like_scorer(cfg)
+    assert "label_asks_attempt" not in sheet.columns                         # new sheets no longer have it
+    sheet["label_asks_attempt"] = "9"                                        # not even a valid value
+    sheet.to_csv(sheet_path(cfg), index=False)
+    v3.agree(cfg, "mock", "author", ai=False)
+    report = pd.read_csv(v3.paths(cfg, "mock", False)[1])
+    assert list(report.measure) == ["hint_level", "gives_answer"]
 
 
 def test_ai_labels_kept_apart(cfg):
