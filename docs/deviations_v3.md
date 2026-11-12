@@ -13,5 +13,6 @@ Kept from the start of v3, as required by `docs/protocol_v3.md`. Add a row to th
 
 | Date | Protocol section | What changed | Why | Data seen at that point | Effect on results |
 |---|---|---|---|---|---|
-
-_None so far._
+| 2026-11-12 | Analysis: Sensitivity (draft, before the freeze) | The `hint_level` and `steps` sweeps draw from each model's own pilot distribution instead of one shared one; sizes a distribution cannot reach are reported as not plantable; `min_detectable_diff` is per model. The `gave_by_turn2` sweep is unchanged and shared. | The pilot's turn-1 distributions differ too much between models for one base (Llama `hint_level` 88% at level 1, Olmo 81% at level 3). | Step a pilot summary (neutral, pedagogical, 100 questions, 1 seed). No contrast data. | Changes only the sensitivity table and `min_detectable_diff`; no reply or contrast. |
+| 2026-11-12 | Dialogue: models and sampling (config, before the freeze) | `generation.batch_size` 8 → 16 for the full run and later steps. The dry run and pilot used 8. | Speed: the step c estimate was about 17.7 GPU hours at batch size 8. | Step a pilot summary and timing. | Batching and padding differ from the pilot, which can change sampled tokens slightly; sampling settings are unchanged. The dry run is repeated at 16 before the freeze. |
+| 2026-11-12 | Analysis: floor or ceiling rule | Not changed. Recorded because the pilot shows Olmo's fallback measure `hint_level` near its own ceiling (81% at level 3). | Kept as written before any data. | Step a pilot summary. | Olmo's primary and control contrasts use `hint_level`; struggle can raise its mean by at most about 0.19. |
