@@ -227,7 +227,7 @@ Mock outputs go to `results_v3/mock/`. `mock-planted` raises `gave_by_turn2`, `h
 - `mock-planted` shows the planted effect in the primary and control contrasts.
 - `mock-no_effect` has a primary interval around zero.
 
-The sensitivity bases for `hint_level` and `steps` are placeholders until step a.
+The sensitivity runs for `hint_level` and `steps` draw from each model's own pilot distribution. The mock models use a generic `default` base.
 
 ### Pre-freeze steps (protocol: Pre-freeze steps)
 
@@ -273,7 +273,7 @@ nohup python scripts/run_v3.py check --source gpu > check.log 2>&1 &
 ```
 
 **6. Before the freeze:**
-- Copy the pilot's turn-1 `hint_level` and `steps` shares into `mock.sensitivity.base_turn1_levels` and `base_steps`.
+- Copy each model's turn-1 `hint_level` and `steps` shares from the pilot into `mock.sensitivity.bases`, one entry per model. A local test checks the copy against `pilot_summary.csv`.
 - Report steps a to d.
 - Approve the protocol, then tag it:
 ```bash
@@ -302,7 +302,7 @@ python scripts/run_v3.py full --source csv
 | `results_v3/dialogues.csv` | One row per dialogue: `answer_turn`, `gave_by_turn2` and the turn-1 measures |
 | `results_v3/answer_turns.csv`, `hint_levels.csv` | Distributions per model × prompt × condition |
 | `results_v3/diagnostics.csv` | Truncation, and identical turn-1 replies across seeds |
-| `results_v3/sensitivity.csv` | Mock power per measure and planted size |
+| `results_v3/sensitivity.csv` | Mock power per model base, measure and planted size. Sizes a model's distribution cannot reach are marked not plantable |
 | `results_v3/validation_agreement.csv` | Step b: agreement and Cohen's kappa per measure, with the labeller |
 | `results_v3/check_summary.csv` | Step d: accuracy, the unparsed rate and the parser rule per model × condition |
 
@@ -321,5 +321,6 @@ The raw v3 replies will be held privately, as v2's are, and their archive checks
 - **The scripted student never attempts the problem.** The dialogue measures how soon a tutor gives in to repeated requests, not the quality of the tutoring.
 - **`gives_answer` stops the dialogue.** A scoring error therefore changes the dialogue itself, not only its score. Step b checks this rule.
 - **`hint_level` and `asks_attempt` are rule-based.** Agreement on the stratified step b sample describes the scorer on that sample, not on the full run.
-- **The sensitivity runs use the mock,** with turn-1 distributions taken from the pilot. The mock writes at most three step lines per reply.
+- **The sensitivity runs use the mock,** with each model's turn-1 distributions taken from the pilot of 100 dialogues. Its replies are independent draws, so real replies may be noisier.
+- **Olmo answers 81% of the time in its first reply.** Its `gave_by_turn2` is above the ceiling, so its primary and control contrasts use `hint_level`, which is near its own ceiling. Struggle can raise Olmo's mean `hint_level` by at most about 0.19.
 - **The compute estimate is likely high.** It assumes every condition continues to turns 2 and 3 as often as the neutral pedagogical pilot does.

@@ -204,7 +204,8 @@ def summary_row_v3(model, contrast, measure, diffs, key, cfg, min_detectable):
 def summarize_v3(d, cfg, keys=None, min_detectable=None):
     """One row per model x contrast x measure, every contrast for every model, within one prompt each.
 
-    keys: model -> key measure from the ceiling/floor rule. min_detectable: measure -> smallest size.
+    keys: model -> key measure from the ceiling/floor rule.
+    min_detectable: model -> measure -> smallest detectable size (min_detectable_by_model).
     """
     measures, keys, min_detectable = cfg["analysis"]["measures"], keys or {}, min_detectable or {}
     means = {(p, m): question_means(d[d["prompt"] == p], m) for p in d["prompt"].unique() for m in measures}
@@ -215,7 +216,8 @@ def summarize_v3(d, cfg, keys=None, min_detectable=None):
                 table = means.get((contrast["prompt"], measure))
                 has = table is not None and model in table.index.get_level_values("model")
                 diffs = paired_diffs(table.loc[model], contrast["a"], contrast["b"]) if has else pd.Series(dtype=float)
-                rows.append(summary_row_v3(model, contrast, measure, diffs, keys.get(model), cfg, min_detectable))
+                rows.append(summary_row_v3(model, contrast, measure, diffs, keys.get(model), cfg,
+                                            min_detectable.get(model, {})))
     return pd.DataFrame(rows)
 
 
@@ -324,20 +326,35 @@ def primary_excludes_zero_v3(d, cfg, measure):
     return excludes_zero(d[d["prompt"] == p["prompt"]], p["a"], p["b"], measure, cfg)
 
 
-def sensitivity_v3(make_dataset, cfg):
-    """Share of simulated runs whose primary interval excludes zero, per measure and planted size.
+def sensitivity_plan(cfg, bases):
+    """(base, measure, size) per sweep: gave_by_turn2 once on the default base, hint_level and steps per base."""
+    plan = [("default", "gave_by_turn2", s) for s in sensitivity_sizes(cfg, "gave_by_turn2")]
+    return plan + [(b, m, s) for b in bases for m in SENSITIVITY_MEASURES[1:] for s in sensitivity_sizes(cfg, m)]
 
-    make_dataset(measure, size, run) returns scored tutor-reply rows of one model (mock.sensitivity_rows_v3).
+
+def sensitivity_v3(make_dataset, cfg, bases, plantable):
+    """Share of simulated runs whose primary interval excludes zero, per base, measure and planted size.
+
+    make_dataset(base, measure, size, run) returns scored tutor-reply rows of one model (mock.sensitivity_rows_v3).
+    plantable(base, measure, size) is False when the base cannot carry the size; that row has no runs and NaN.
     """
     runs, rows = cfg["mock"]["sensitivity"]["runs"], []
-    for measure in SENSITIVITY_MEASURES:
-        for size in sensitivity_sizes(cfg, measure):
-            hits = [primary_excludes_zero_v3(dialogues_v3(make_dataset(measure, size, run)), cfg, measure)
-                    for run in range(runs)]
-            rows.append({"measure": measure, "size": size, "runs": runs, "share_excluding_zero": float(np.mean(hits))})
+    for base, measure, size in sensitivity_plan(cfg, bases):
+        ok = plantable(base, measure, size)
+        hits = [primary_excludes_zero_v3(dialogues_v3(make_dataset(base, measure, size, run)), cfg, measure)
+                for run in range(runs if ok else 0)]
+        rows.append({"base": base, "measure": measure, "size": size, "plantable": ok, "runs": len(hits),
+                     "share_excluding_zero": float(np.mean(hits)) if ok else np.nan})
     return pd.DataFrame(rows)
 
 
 def smallest_detectable_v3(table, power):
-    """Measure -> smallest planted size detected in at least `power` of runs (NaN if none)."""
-    return {m: smallest_detectable(t.rename(columns={"size": "diff"}), power) for m, t in table.groupby("measure")}
+    """(base, measure) -> smallest planted size detected in at least `power` of runs (NaN if none)."""
+    return {key: smallest_detectable(t.rename(columns={"size": "diff"}), power)
+            for key, t in table.groupby(["base", "measure"])}
+
+
+def min_detectable_by_model(found, base_of):
+    """Model -> measure -> size. gave_by_turn2 comes from the shared default sweep, the others from the model's base."""
+    return {model: {m: found.get(("default" if m == "gave_by_turn2" else base, m), np.nan) for m in SENSITIVITY_MEASURES}
+            for model, base in base_of.items()}

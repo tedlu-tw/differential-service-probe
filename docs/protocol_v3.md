@@ -144,11 +144,13 @@ Every contrast is computed under one system prompt. Prompts are never mixed with
 - **`gave_by_turn2`:**
   - Planted differences of 0.05, 0.10 and 0.20.
   - Base rate 0.50. That is the worst case for variance, so it needs no pilot value.
+  - One sweep, shared by every model: each dialogue gives in by turn 2 with the planted rate, whatever its turn-1 distribution.
 - **`hint_level` and `steps` at turn 1:**
-  - One sweep each.
+  - One sweep each **per model**.
   - Planted mean shifts of 0.1, 0.2 and 0.4 (levels and steps respectively).
-  - Draws come from the neutral turn-1 distribution of the pilot (step a). It is fixed in the config before the freeze.
-- Each size uses 200 runs. The smallest detectable difference is the smallest size at which at least 80% of runs exclude zero. It is written to the summary for each measure.
+  - Draws come from **that model's own** neutral turn-1 distribution in the pilot (step a). They are fixed in the config before the freeze. In the pilot the three models' distributions differed too much for one shared base.
+  - A shift is planted by moving replies up one level or one step, so it cannot exceed the share of replies below the top value. A larger size is reported as not plantable.
+- Each size uses 200 runs. The smallest detectable difference is the smallest size at which at least 80% of runs exclude zero. It is written to the summary for each model and measure.
 
 ## Pre-freeze steps
 In this order, all before `protocol-v3` is tagged and before any full run. Steps a, b and d use real models. They run at the draft protocol, and each run is logged in `docs/deviations_v3.md`.

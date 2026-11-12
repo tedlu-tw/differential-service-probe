@@ -6,8 +6,8 @@ import pytest
 
 from ds import load_config
 from ds.dialogue import run_dialogues
-from ds.mock import (dialogue_plan, mock_reply_fn, run_mock_check_v3, run_mock_dialogues, run_mock_solve_v3,
-                     sensitivity_params, sensitivity_rows_v3, shift_up, v3_setting)
+from ds.mock import (dialogue_plan, is_plantable, mock_reply_fn, run_mock_check_v3, run_mock_dialogues,
+                     run_mock_solve_v3, sensitivity_params, sensitivity_rows_v3, shift_up, v3_setting)
 from ds.score import score_check_rows_v3, score_rows_v3, score_solve_rows_v3
 from ds.stimuli_v3 import build_cells_v3, build_check_cells_v3, build_solve_cells_v3, hint_ignore_numbers, \
     make_questions_v3
@@ -146,6 +146,34 @@ def test_mean_shift_planted_exactly(cfg, measure, key, size):
     params = sensitivity_params(cfg, measure, size)
     assert sum(params["history_struggle"][key]) == pytest.approx(1)
     assert mean_of(params["history_struggle"][key]) - mean_of(params["default"][key]) == pytest.approx(size)
+
+
+MODELS = ["meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen3-8B", "allenai/Olmo-3-7B-Instruct"]
+
+
+@pytest.mark.parametrize("base", ["default"] + MODELS)
+@pytest.mark.parametrize("measure,key", [("hint_level", "turn1_levels"), ("steps", "steps")])
+@pytest.mark.parametrize("size", [0.1, 0.2, 0.4])
+def test_shift_planted_exactly_on_each_base(cfg, base, measure, key, size):
+    if not is_plantable(cfg, measure, size, base):
+        pytest.skip("not plantable on this base")
+    params = sensitivity_params(cfg, measure, size, base)
+    assert params["default"][key] == cfg["mock"]["sensitivity"]["bases"][base][key]
+    assert mean_of(params["history_struggle"][key]) - mean_of(params["default"][key]) == pytest.approx(size)
+
+
+def test_plantable_sizes(cfg):
+    """A shift moves replies up by one, so it cannot exceed the share below the top value (Olmo: 0.19)."""
+    olmo = "allenai/Olmo-3-7B-Instruct"
+    assert [is_plantable(cfg, "hint_level", s, olmo) for s in (0.1, 0.2, 0.4)] == [True, False, False]
+    assert all(is_plantable(cfg, m, s, b) for b in ["default"] + MODELS for m in ("steps",) for s in (0.1, 0.2, 0.4))
+    assert all(is_plantable(cfg, "gave_by_turn2", s, b) for b in MODELS for s in (0.05, 0.10, 0.20))
+
+
+def test_gave_by_turn2_uses_the_shared_base(cfg):
+    """Olmo answers 81% at turn 1, above the 0.50 base: the gave_by_turn2 sweep never uses a model's base."""
+    for model in MODELS:
+        assert sensitivity_params(cfg, "gave_by_turn2", 0.1, model) == sensitivity_params(cfg, "gave_by_turn2", 0.1)
 
 
 def test_steps_beyond_three(cfg, questions, cells):

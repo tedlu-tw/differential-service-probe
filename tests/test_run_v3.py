@@ -87,7 +87,8 @@ def test_full_mock(mock_run):
     primary = summary[summary.role == "primary"].set_index("model")
     assert primary.loc["mock-planted", "ci_low"] > 0                  # the planted effect is found
     assert set(primary.min_detectable_diff.astype(str)) <= {"0.05", "0.1", "0.2", ""}
-    assert len(mock_file(mock_run, "sensitivity_csv")) == 9
+    sensitivity = mock_file(mock_run, "sensitivity_csv")
+    assert len(sensitivity) == 9 and set(sensitivity.base) == {"default"}      # mock models use the default base
     replication = mock_file(mock_run, "replication_csv")
     assert set(replication.prompt) == {"plain"} and set(replication.condition) == {"neutral"}
     for key in ("diagnostics_csv", "answer_turns_csv", "hint_levels_csv"):
@@ -151,6 +152,35 @@ def test_real_full_stops_before_the_gpu(tmp_path, monkeypatch):
     write_agreement(cfg, {"hint_level": 0.9, "gives_answer": 0.9, "asks_attempt": 0.9})
     with pytest.raises(SystemExit, match="step a"):
         run_v3.run_full(cfg, "gpu")
+
+
+def test_real_full_needs_every_sensitivity_base(tmp_path, monkeypatch):
+    cfg = small_cfg(tmp_path)
+    run_v3.run_pilot(cfg, "mock")
+    copy_mock_to_real(cfg, ["pilot_csv"])
+    write_agreement(cfg, {"hint_level": 0.9, "gives_answer": 0.9, "asks_attempt": 0.9})
+    del cfg["mock"]["sensitivity"]["bases"]["allenai/Olmo-3-7B-Instruct"]
+    monkeypatch.setattr(run_v3, "generate_on_gpu", lambda *a, **k: pytest.fail("reached the GPU"))
+    with pytest.raises(SystemExit, match="no sensitivity base for \\['allenai/Olmo-3-7B-Instruct'\\]"):
+        run_v3.run_full(cfg, "gpu")
+    assert run_v3.sensitivity_bases(cfg, ["mock-planted"], "mock") == {"mock-planted": "default"}
+    assert run_v3.sensitivity_bases(cfg, ["Qwen/Qwen3-8B"], "csv") == {"Qwen/Qwen3-8B": "Qwen/Qwen3-8B"}
+
+
+PILOT = Path(__file__).parents[1] / "results_v3" / "pilot_summary.csv"
+
+
+@pytest.mark.skipif(not PILOT.exists(), reason="the pilot results are private; this is checked locally")
+def test_bases_match_the_pilot():
+    """The config's per-model bases are the pilot's turn-1 shares, steps up to each model's largest count."""
+    bases, pilot = load_config(CONFIG)["mock"]["sensitivity"]["bases"], pd.read_csv(PILOT)
+    assert set(bases) - {"default"} == set(pilot.model)
+    for row in pilot.to_dict("records"):
+        steps = [row[c] for c in pilot.columns if c.startswith("steps_")]
+        while steps[-1] == 0:
+            steps.pop()
+        assert bases[row["model"]]["turn1_levels"] == pytest.approx([row[f"hint_level_{k}"] for k in range(4)])
+        assert bases[row["model"]]["steps"] == pytest.approx(steps)
 
 
 def test_keys_follow_pilot_and_step_b(tmp_path):

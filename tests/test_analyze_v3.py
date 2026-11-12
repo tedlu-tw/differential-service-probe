@@ -7,9 +7,9 @@ import pytest
 
 from ds import load_config
 from ds.analyze import (answer_turn_shares, check_report_v3, cohen_kappa, contrasts_v3, dialogues_v3, excludes_zero,
-                        hint_level_shares, key_measures_v3, pilot_report_v3, replication_v3, sensitivity_v3,
-                        smallest_detectable_v3, summarize_v3)
-from ds.mock import run_mock_dialogues, sensitivity_rows_v3, v3_setting
+                        hint_level_shares, key_measures_v3, min_detectable_by_model, pilot_report_v3, replication_v3,
+                        sensitivity_v3, smallest_detectable_v3, summarize_v3)
+from ds.mock import is_plantable, run_mock_dialogues, sensitivity_rows_v3, v3_setting
 from ds.score import score_rows_v3
 from ds.stimuli_v3 import build_cells_v3, hint_ignore_numbers, make_questions_v3
 
@@ -149,12 +149,22 @@ def test_switched_model_uses_fallback_for_primary_and_control(d, cfg):
     assert set(kept.measure) == {"gave_by_turn2"}
 
 
-def test_min_detectable_per_measure(d, cfg):
-    sizes = {"gave_by_turn2": 0.10, "hint_level": 0.2, "steps": 0.4}
+def test_min_detectable_per_model_and_measure(d, cfg):
+    sizes = {"mock-planted": {"gave_by_turn2": 0.10, "hint_level": 0.2, "steps": 0.4},
+             "mock-no_effect": {"gave_by_turn2": 0.05, "hint_level": 0.1, "steps": 0.1}}
     out = summarize_v3(d, cfg, keys={"mock-planted": "steps"}, min_detectable=sizes)
     marked = out[out.min_detectable_diff.notna()]
     assert set(marked.role) == {"primary"}
-    assert dict(zip(marked.model, marked.min_detectable_diff)) == {"mock-planted": 0.4, "mock-no_effect": 0.10}
+    assert dict(zip(marked.model, marked.min_detectable_diff)) == {"mock-planted": 0.4, "mock-no_effect": 0.05}
+
+
+def test_min_detectable_by_model():
+    found = {("default", "gave_by_turn2"): 0.10, ("default", "hint_level"): 0.2, ("default", "steps"): 0.2,
+             ("m", "hint_level"): np.nan, ("m", "steps"): 0.4, ("m", "gave_by_turn2"): 0.99}
+    out = min_detectable_by_model(found, {"m": "m", "mock": "default"})
+    assert out["m"]["gave_by_turn2"] == 0.10                          # the shared sweep, not the model's own row
+    assert np.isnan(out["m"]["hint_level"]) and out["m"]["steps"] == 0.4
+    assert out["mock"] == {"gave_by_turn2": 0.10, "hint_level": 0.2, "steps": 0.2}
 
 
 def test_models_not_averaged(d, cfg):
@@ -247,23 +257,33 @@ def test_cohen_kappa():
 
 # ---------- sensitivity ----------
 
+OLMO = "allenai/Olmo-3-7B-Instruct"
+
+
 def test_sensitivity_v3(cfg, questions, cells):
     small = copy.deepcopy(cfg)
     small["mock"]["sensitivity"]["runs"] = 20
     cache = {}
-    table = sensitivity_v3(lambda m, s, run: sensitivity_rows_v3(cells, questions, small, m, s, run, cache), small)
-    assert list(zip(table.measure, table["size"])) == [("gave_by_turn2", 0.05), ("gave_by_turn2", 0.10),
-                                                       ("gave_by_turn2", 0.20), ("hint_level", 0.1), ("hint_level", 0.2),
-                                                       ("hint_level", 0.4), ("steps", 0.1), ("steps", 0.2), ("steps", 0.4)]
-    for _, t in table.groupby("measure"):
+    make = lambda base, m, s, run: sensitivity_rows_v3(cells, questions, small, m, s, run, cache, base)
+    table = sensitivity_v3(make, small, ["default", OLMO], lambda base, m, s: is_plantable(small, m, s, base))
+    plan = list(zip(table.base, table.measure, table["size"]))
+    assert plan[:3] == [("default", "gave_by_turn2", s) for s in (0.05, 0.10, 0.20)]   # one shared sweep
+    assert len(plan) == 3 + 2 * 6 and (OLMO, "gave_by_turn2", 0.05) not in plan
+    # 19% of Olmo's turn-1 replies are below level 3, so its hint_level can rise by 0.1 but not 0.2 or 0.4.
+    hint = table[(table.base == OLMO) & (table.measure == "hint_level")]
+    assert list(hint.plantable) == [True, False, False] and list(hint.runs) == [20, 0, 0]
+    assert hint.share_excluding_zero.isna().tolist() == [False, True, True]
+    for _, t in table[table.plantable].groupby(["base", "measure"]):
         shares = list(t.share_excluding_zero)
-        assert shares[-1] >= 0.8 and shares[0] <= shares[-1]
-    found = smallest_detectable_v3(table, 0.8)
-    assert set(found) == {"gave_by_turn2", "hint_level", "steps"}
+        assert shares[0] <= shares[-1]
+    assert (table[table.base == "default"].groupby("measure").share_excluding_zero.max() >= 0.8).all()
+    assert set(smallest_detectable_v3(table, 0.8)) == {("default", "gave_by_turn2"), ("default", "hint_level"),
+                                                       ("default", "steps"), (OLMO, "hint_level"), (OLMO, "steps")}
 
 
 def test_smallest_detectable_v3():
-    table = pd.DataFrame({"measure": ["a", "a", "b", "b"], "size": [0.1, 0.2, 0.1, 0.2],
-                          "share_excluding_zero": [0.5, 0.9, 0.1, 0.3]})
+    table = pd.DataFrame({"base": ["x"] * 4 + ["y"] * 2, "measure": ["a", "a", "b", "b", "a", "a"],
+                          "size": [0.1, 0.2, 0.1, 0.2, 0.1, 0.2],
+                          "share_excluding_zero": [0.5, 0.9, 0.1, 0.3, 0.95, np.nan]})
     out = smallest_detectable_v3(table, 0.8)
-    assert out["a"] == 0.2 and np.isnan(out["b"])
+    assert out[("x", "a")] == 0.2 and np.isnan(out[("x", "b")]) and out[("y", "a")] == 0.1

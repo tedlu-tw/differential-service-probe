@@ -231,31 +231,46 @@ def later_for_rate(turn1_levels, rate, last):
     return [(rate - p1) / (1 - p1), last]
 
 
-def sensitivity_params(cfg, measure, size):
-    """Mock parameters that plant one difference of one size in one measure, primary contrast only."""
+def sensitivity_params(cfg, measure, size, base="default"):
+    """Mock parameters that plant one difference of one size in one measure, primary contrast only.
+
+    base: a name under mock.sensitivity.bases, a model's own pilot distribution. gave_by_turn2
+    always uses "default": every dialogue gives in by turn 2 with the planted rate, whatever its
+    turn-1 distribution, so one sweep serves every model. hint_level and steps are analysed at
+    turn 1 only, so for them later_give_in is fixed at 0.5 and does not matter.
+    """
     sens = cfg["mock"]["sensitivity"]
-    levels, steps, base = sens["base_turn1_levels"], sens["base_steps"], sens["gave_by_turn2"]["base"]
-    default = {"turn1_levels": levels, "steps": steps, "later_give_in": later_for_rate(levels, base, 0.5)}
-    planted = dict(default)
+    b = sens["bases"]["default" if measure == "gave_by_turn2" else base]
+    default = {"turn1_levels": b["turn1_levels"], "steps": b["steps"], "later_give_in": [0.5, 0.5]}
     if measure == "gave_by_turn2":
-        planted["later_give_in"] = later_for_rate(levels, base + size, 0.5)
-    elif measure == "hint_level":
-        # Raising some turn-1 replies to level 3 also changes gave_by_turn2; only hint_level is analysed here.
-        planted["turn1_levels"] = shift_up(levels, size)
-    elif measure == "steps":
-        planted["steps"] = shift_up(steps, size)
+        rate = sens["gave_by_turn2"]["base"]
+        default["later_give_in"] = later_for_rate(b["turn1_levels"], rate, 0.5)
+        planted = {**default, "later_give_in": later_for_rate(b["turn1_levels"], rate + size, 0.5)}
+    elif measure in ("hint_level", "steps"):
+        # Raising turn-1 replies to hint_level 3 also changes gave_by_turn2; only the swept measure is analysed.
+        key = "turn1_levels" if measure == "hint_level" else "steps"
+        planted = {**default, key: shift_up(default[key], size)}
     else:
         raise ValueError(f"no sensitivity for {measure}")
     return {"default": default, cfg["analysis"]["primary"]["a"]: planted}
 
 
-def sensitivity_rows_v3(cells, questions, cfg, measure, size, run, cache=None):
+def is_plantable(cfg, measure, size, base="default"):
+    """False when the base cannot carry the size, e.g. a mean shift larger than the share below the top value."""
+    try:
+        sensitivity_params(cfg, measure, size, base)
+    except ValueError:
+        return False
+    return True
+
+
+def sensitivity_rows_v3(cells, questions, cfg, measure, size, run, cache=None, base="default"):
     """One simulated dataset of the primary contrast, every tutor reply scored like a real one.
 
     cache: passed to score_rows_v3, so the same mock texts are scored once across all runs.
     """
     primary = cfg["analysis"]["primary"]
     keep = [c for c in cells if c["prompt"] == primary["prompt"] and c["condition"] in (primary["a"], primary["b"])]
-    rows = run_mock_dialogues(keep, questions, cfg, sensitivity_params(cfg, measure, size),
-                              f"mock-{measure}-{size}", cfg["seeds"]["generation"], run)
+    rows = run_mock_dialogues(keep, questions, cfg, sensitivity_params(cfg, measure, size, base),
+                              f"mock-{base}-{measure}-{size}", cfg["seeds"]["generation"], run)
     return score_rows_v3(rows, questions, cfg["scoring"], hint_ignore_numbers(cfg), cache)

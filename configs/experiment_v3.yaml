@@ -119,13 +119,13 @@ models:
           enable_thinking: false
     - id: allenai/Olmo-3-7B-Instruct           # Apache 2.0
 
-generation:                  # as in v2
+generation:                  # as in v2, except batch_size
     temperature: 0.7
     top_p: 1.0
     top_k: 0
     repetition_penalty: 1.0
     max_new_tokens: 512      # per tutor reply
-    batch_size: 8
+    batch_size: 16           # 8 in v2 and in the v3 dry run and pilot; raised after the pilot for speed (deviations_v3.md)
     dtype: bfloat16
 
 scoring:
@@ -254,10 +254,24 @@ mock:
             shifts: [0.1, 0.2, 0.4]
         steps:
             shifts: [0.1, 0.2, 0.4]
-        # PLACEHOLDER until step a: replace with the neutral turn-1 distributions from the pilot
-        # before the freeze (protocol: Sensitivity).
-        base_turn1_levels: [0.10, 0.40, 0.30, 0.20]
-        base_steps: [0.40, 0.30, 0.20, 0.10]
+        # Turn-1 distributions the hint_level and steps sweeps draw from (protocol: Sensitivity):
+        # hint_level 0 to 3, and steps 0 to the largest count the model used. One per model, copied
+        # from results_v3/pilot_summary.csv (step a, 2026-11-12); a test checks the copy locally.
+        # default serves the gave_by_turn2 sweep, whose power does not depend on the turn-1
+        # distribution, and the mock models.
+        bases:
+            default:
+                turn1_levels: [0.10, 0.40, 0.30, 0.20]
+                steps: [0.40, 0.30, 0.20, 0.10]
+            meta-llama/Llama-3.1-8B-Instruct:
+                turn1_levels: [0.00, 0.88, 0.12, 0.00]
+                steps: [0.94, 0.02, 0.03, 0.01]
+            Qwen/Qwen3-8B:
+                turn1_levels: [0.00, 0.50, 0.42, 0.08]
+                steps: [0.42, 0.00, 0.09, 0.20, 0.17, 0.04, 0.06, 0.00, 0.01, 0.00, 0.01]
+            allenai/Olmo-3-7B-Instruct:
+                turn1_levels: [0.00, 0.16, 0.03, 0.81]
+                steps: [0.06, 0.01, 0.11, 0.30, 0.16, 0.17, 0.10, 0.03, 0.05, 0.01]
 
 dry_run:
     n_questions: 5

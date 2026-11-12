@@ -21,10 +21,11 @@ import pandas as pd
 
 from ds import load_config
 from ds.analyze import (answer_turn_shares, check_report_v3, diagnostics_v3, dialogues_v3, hint_level_shares,
-                        key_measures_v3, pilot_report_v3, replication_v3, sensitivity_v3, shares,
-                        smallest_detectable_v3, summarize_v3)
+                        key_measures_v3, min_detectable_by_model, pilot_report_v3, replication_v3,
+                        sensitivity_v3, shares, smallest_detectable_v3, summarize_v3)
 from ds.generate_v3 import generate_on_gpu, single_turn   # torch is imported only inside generate_on_gpu
-from ds.mock import run_mock_check_v3, run_mock_dialogues, run_mock_solve_v3, sensitivity_rows_v3, v3_setting
+from ds.mock import (is_plantable, run_mock_check_v3, run_mock_dialogues, run_mock_solve_v3, sensitivity_rows_v3,
+                     v3_setting)
 from ds.score import score_check_rows_v3, score_rows_v3, score_solve_rows_v3
 from ds.stimuli_v3 import (build_cells_v3, build_check_cells_v3, build_solve_cells_v3, hint_ignore_numbers,
                            list_cells_v3, make_questions_v3, pilot_questions)
@@ -212,12 +213,24 @@ def load_keys_v3(cfg, source, questions):
     return keys
 
 
-def run_sensitivity(cells, questions, cfg, source):
-    """Always the mock: it describes the design, not a model. One score cache serves every run."""
-    cache = {}
-    table = sensitivity_v3(lambda m, size, run: sensitivity_rows_v3(cells, questions, cfg, m, size, run, cache), cfg)
+def sensitivity_bases(cfg, models, source):
+    """Model -> its base under mock.sensitivity.bases. Only the mock models fall back to default."""
+    bases = cfg["mock"]["sensitivity"]["bases"]
+    missing = sorted(set(models) - set(bases))
+    if source != "mock" and missing:
+        raise SystemExit(f"no sensitivity base for {missing}: copy its pilot distributions into the config")
+    return {m: m if m in bases else "default" for m in models}
+
+
+def run_sensitivity(cells, questions, cfg, source, models):
+    """Always the mock, on each model's own pilot distribution: it describes the design for that model.
+    One score cache serves every run."""
+    base_of, cache = sensitivity_bases(cfg, models, source), {}
+    make = lambda base, m, size, run: sensitivity_rows_v3(cells, questions, cfg, m, size, run, cache, base)
+    table = sensitivity_v3(make, cfg, sorted(set(base_of.values())),
+                           lambda base, m, size: is_plantable(cfg, m, size, base))
     write(table, out_path(cfg, "sensitivity_csv", source))
-    return smallest_detectable_v3(table, cfg["mock"]["sensitivity"]["power"])
+    return min_detectable_by_model(smallest_detectable_v3(table, cfg["mock"]["sensitivity"]["power"]), base_of)
 
 
 def write_tables(d, df, cfg, source):
@@ -230,12 +243,14 @@ def write_tables(d, df, cfg, source):
 def run_full(cfg, source):
     questions, cells = make_questions_v3(cfg), build_cells_v3(cfg)
     keys = load_keys_v3(cfg, source, questions)   # first, so a real run without steps a and b stops before the GPU
+    if source == "gpu":
+        sensitivity_bases(cfg, [m["id"] for m in cfg["models"]], source)   # likewise for the pilot bases
     df = get_replies(cells, questions, cfg, source, "replies_csv", cfg["seeds"]["generation"], {"tutor": "full"})
     d = dialogues_v3(score_tutor(df, questions, cfg))
     if source != "mock" and set(d["model"]) - set(keys):
         raise SystemExit(f"no pilot for {sorted(set(d['model']) - set(keys))}: run step a for every model")
     write_tables(d, df, cfg, source)
-    summary = summarize_v3(d, cfg, keys, run_sensitivity(cells, questions, cfg, source))
+    summary = summarize_v3(d, cfg, keys, run_sensitivity(cells, questions, cfg, source, sorted(set(d["model"]))))
     write(summary, out_path(cfg, "summary_csv", source))
     replication = replication_v3(d, cfg)
     write(replication, out_path(cfg, "replication_csv", source))
