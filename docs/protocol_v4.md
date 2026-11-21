@@ -395,6 +395,7 @@ Apply the replacement rule here if needed. No contrasts are computed.
 - For both primaries, with the hierarchical bootstrap: the smallest detectable difference, and the power to show equivalence at the chosen bounds.
 - Each model's base is fixed after its pilot.
 - **If the interaction's equivalence power at the bounds is below 0.8 under no effect,** the author may increase the number of current questions before the freeze. This is recorded in `docs/deviations_v4.md`. The new questions follow the same item rules, and the item bank tests (step a) are rerun.
+    - **Cap:** every family is capped at 38 current questions (152 in all), so the families stay balanced. The rate template allows only 38 new current questions.
 
 **g) Cost estimate.** GPU hours per model and judge cost, from the dry run and pilot timing.
 
@@ -456,6 +457,11 @@ All v2 and v3 tests keep passing.
     - activation hooks or `output_hidden_states` during generation,
     - probe code,
     - any design change made for probing.
+
+## Limits
+
+Known before any v4 run:
+- **The rate family has the least item variety.** The rate template allows only 115 problems in all (23 speeds × 5 durations). v2 and v3 used 75 of them, so 38 new current questions are possible, and most rate pool items repeat a v2 or v3 question.
 
 ## Definition of done before the freeze
 
