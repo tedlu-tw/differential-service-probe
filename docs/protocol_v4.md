@@ -138,6 +138,7 @@ What the templates of the four new models do, checked at the revisions above:
 
 **Ministral tokenizer.** Mistral's model card recommends its `mistral-common` tokenizer. That is an extra package, and it encodes messages itself, so it does not fit v3's render-then-tokenize code.
 - **Decided:** the official repo's `tokenizer.json` and `chat_template.jinja`, through v3's rendering, with no new package.
+- **Regex fix:** the repo's `tokenizer.json` has a known pre-tokenizer regex error, for which transformers warns of incorrect tokenization. The tokenizer is loaded with transformers' own option, `fix_mistral_regex=True`, recorded in the config. No file is edited. On every Arm 3 context and every fixed v4 message, the token IDs are identical with and without it. It matters only for text such as the model's own replies, which are re-tokenized when fed back.
 - The dry run then checks that each Mistral control token in the rendered context (`[SYSTEM_PROMPT]`, `[INST]` and so on) is encoded as a single special token.
 
 **Thinking.**
@@ -349,7 +350,8 @@ In this order, all logged in `docs/deviations_v4.md`.
 - templates, forced text and `system_mode`,
 - thinking-tag stripping,
 - the effective generation settings,
-- empty replies and timing.
+- empty replies and timing,
+- how replies end, per model: the share that end on a stop token, and the share cut off at `max_new_tokens`.
 
 Apply the replacement rule here if needed. No contrasts are computed.
 
