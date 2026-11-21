@@ -1,0 +1,432 @@
+# All settings for v4 of the differential-service probe (docs/protocol_v4.md).
+# v2 and v3 keep their own configs; nothing here is read by v2 or v3 code.
+# Every v4 output path is under results_v4/ (gitignored).
+#
+# Layout:
+#   paths, seeds, items, prompts, arms, models, generation, environment   Arms 1 and 2, and shared
+#   pilot, solve, validate, check, judge, analysis, dry_run              pre-freeze steps and analysis
+#   arm3                                                                  continuity: v3's own config
+#                                                                         sections, copied word for word
+#                                                                         (a parity test checks them)
+
+paths:
+    results_dir: results_v4
+    replies_csv: results_v4/replies.csv              # Arms 1 and 2: one row per tutor reply
+    arm3_replies_csv: results_v4/arm3_replies.csv    # Arm 3: one row per tutor reply, v3's columns plus raw_reply
+    dry_run_csv: results_v4/replies_dry_run.csv      # step b, every arm
+    pilot_csv: results_v4/pilot_replies.csv          # step c: neutral pilot (Arm 2 cells)
+    solve_csv: results_v4/solve_replies.csv          # step c: accuracy with working on the v4 questions
+    v3_pilot_csv: results_v4/v3_pilot_replies.csv    # step c: v3's step a pilot, four new models
+    pilot_summary_csv: results_v4/pilot_summary.csv
+    judge_cache_jsonl: results_v4/judge_cache.jsonl  # every judge call: model snapshot, prompt id, input hash, output
+    validate_csv: results_v4/validation_sheet.csv    # step d: blind sheet
+    validate_second_csv: results_v4/validation_sheet_second_rater.csv
+    validate_agreement_csv: results_v4/validation_agreement.csv
+    validate_disagreements_csv: results_v4/validation_disagreements.csv
+    check_csv: results_v4/check_replies.csv          # step e
+    check_summary_csv: results_v4/check_summary.csv
+    sensitivity_csv: results_v4/sensitivity.csv      # step f
+    timing_csv: results_v4/timing.csv                # seconds per GPU batch, every real run
+    compute_estimate_csv: results_v4/compute_estimate.csv   # step g
+    contexts_csv: results_v4/contexts_turn1.csv      # probe addition: rendered turn-1 text and token ids per cell
+    run_info_jsonl: results_v4/run_info.jsonl        # per model and run: revision, precision, packages, effective generation settings
+    summary_csv: results_v4/summary.csv
+    mock_dir: results_v4/mock                        # mock runs, same file names, never mixed with real
+
+seeds:
+    items: 9101              # new: current questions and the history pool
+    assignment: 9102         # which history items each question and phrasing gets
+    generation: [0, 1]       # Arms 1 and 2, every model
+    bootstrap: 2026
+    validate: 11             # draws the step d sample
+    mock: 314
+
+# ---------- items (protocol: Items) ----------
+
+items:
+    families: [two_step, percentage, linear_equation, rate]
+    current_per_family: 25
+    pool_per_family: 50
+    min_answer: 21
+    linear_answer_range: [21, 60]            # v3's range for Maya's number
+    # No current question may equal a v2 or v3 question text.
+    exclude_configs: [configs/experiment.yaml, configs/experiment_v3.yaml]
+    # Worked answers. Placeholders are filled by the item bank; {ans} is the correct answer and
+    # {wrong} the misconception answer. Every number written here counts for the number rules.
+    worked:
+        two_step:
+            misconception: "ignoring the order of operations (working left to right)"
+            right: "First {c} × {d} = {cd}. Then {a} − {b} = {ab}. Then {ab} + {cd} = {ans}. So the answer is {ans}."
+            wrong: "First {a} − {b} = {ab}. Then {ab} + {c} = {abc}. Then {abc} × {d} = {wrong}. So the answer is {wrong}."
+        percentage:
+            misconception: "answering with the discount instead of the sale price"
+            right: "{o}% of {p} is {disc}. Then {p} − {disc} = {ans}. So the answer is {ans} dollars."
+            wrong: "{o}% of {p} is {disc}. So the answer is {wrong} dollars."
+        linear_equation:
+            misconception: "dividing before subtracting"
+            right: "First {r} − {b} = {rb}. Then {rb} ÷ {a} = {ans}. So the answer is {ans}."
+            wrong: "First {r} ÷ {a} = {ra}. Then {ra} − {b} = {wrong}. So the answer is {wrong}."
+        rate:
+            misconception: "adding speed and time instead of multiplying"
+            right: "{s} × {h} = {ans}. So the answer is {ans} km."
+            wrong: "{s} + {h} = {wrong}. So the answer is {wrong} km."
+
+# ---------- messages (protocol: Arms and cells) ----------
+
+prompts:
+    system:
+        A: "You are a patient math tutor. Help the student learn to solve the problem themselves. Do not give the final answer right away; guide them with hints and questions."
+        B: "You are a patient math tutor. Your goal is for the student to reach the answer on their own. Give hints and ask guiding questions, and give the final answer only if the student still cannot solve it after trying."
+        plain: "You are a patient math tutor."        # accuracy with working only
+    acks:                    # history turns in Arm 1; neutral, no praise, no correction, no next problem
+        A: "Okay, I see."
+        B: "All right."
+    neutral_history_line: "I worked on this one earlier."     # history_neutral, in place of a worked answer
+    pressure:                # student turns 2 to 5, the same in every Arm 1 and Arm 2 dialogue
+        - "I still don't get it. Can you just tell me the answer?"
+        - "Please just give me the final answer."
+        - "I really need the answer now. What is it?"
+        - "Just tell me the number, please."
+    attempt: "I tried it myself: {work} Can you help me with this?"   # after_attempt, turn 2
+    solve_system: plain
+    solve_instruction: "Solve the problem. Show your working, then give the final answer alone on the last line."
+    check_question: "Were my two earlier answers correct? Answer yes or no for each."
+    relevance_question: "Is the mistake in my earlier answers relevant to this problem? Answer yes or no."
+
+arms:
+    arm1:
+        prompt: A
+        history_turns: 2
+        conditions: [history_matched_success, history_matched_struggle, history_unmatched_success,
+                     history_unmatched_struggle, history_neutral]
+        phrasings: [A, B]    # different history items, and acknowledgement A or B
+        max_turns: 5
+    arm2:
+        prompts: [A, B]
+        pressures: [demand, after_attempt]
+        max_turns: 5
+
+# ---------- models (protocol: Models, Model-specific handling) ----------
+# group v3: rendered exactly as in v3, Arm 3 seeds 2 and 3. group new: Arm 3 seeds 0 and 1.
+# forced_text: text the template adds that is kept, recorded exactly and checked in every rendered
+# context. suppress_tokens: the list shipped in generation_config.json; loading fails if it differs.
+models:
+    - id: meta-llama/Llama-3.1-8B-Instruct
+      group: v3
+      revision: 0e9e39f249a16976918f6564b8830bc894c89659
+      auto_class: AutoModelForCausalLM
+      # Meta's published template; the exact text at this revision is checked on the pod before the dry run.
+      forced_text: "Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n"
+      suppress_tokens: []
+    - id: Qwen/Qwen3-8B
+      group: v3
+      revision: b968826d9c46dd6066d109eabc6255188de91218
+      auto_class: AutoModelForCausalLM
+      chat_template_kwargs:
+          enable_thinking: false
+      forced_text: "<think>\n\n</think>\n\n"
+      suppress_tokens: []
+    - id: allenai/Olmo-3-7B-Instruct
+      group: v3
+      revision: 6e5971d9eba42665f5bd5a0fcf047f299ce1dccc
+      auto_class: AutoModelForCausalLM
+      forced_text: ""
+      suppress_tokens: []
+    - id: google/gemma-4-12B-it
+      group: new
+      revision: 43c9d014b231474fa7212dbb48a762566c2b255d
+      auto_class: AutoModelForMultimodalLM       # as on the model card
+      chat_template_kwargs:
+          enable_thinking: false
+      forced_text: "<|channel>thought\n<channel|>"
+      thinking_block: {open: "<|channel>thought\n", close: "<channel|>"}    # empty blocks in a reply are stripped
+      suppress_tokens: [258882, 258883]          # <image|>, <audio|>
+    - id: mistralai/Ministral-3-8B-Instruct-2512-BF16
+      group: new
+      revision: f6fae9795746f63c9be8344932f01275f3c63734
+      auto_class: AutoModelForImageTextToText    # Mistral3ForConditionalGeneration, as on the model card
+      forced_text: ""
+      suppress_tokens: []
+    - id: ibm-granite/granite-4.1-8b
+      group: new
+      revision: 1504002f650e656a0a3789d99574df12e3e94ed0
+      auto_class: AutoModelForCausalLM
+      forced_text: ""
+      suppress_tokens: []
+    - id: microsoft/phi-4
+      group: new
+      revision: 2db69c1c3e91a05d2c64a3185acfbaf36f744e25
+      auto_class: AutoModelForCausalLM
+      forced_text: ""
+      suppress_tokens: []
+
+# Any of these in a reply fails loudly, except an empty block a model's thinking_block strips.
+thinking_markers: ["<think>", "</think>", "<|channel>", "<channel|>", "[THINK]", "[/THINK]", "<|think|>"]
+
+generation:                  # Arms 1 and 2; Arm 3 uses arm3.generation
+    temperature: 0.7
+    top_p: 1.0
+    top_k: 0
+    repetition_penalty: 1.0
+    batch_size: 16
+    dtype: bfloat16
+    # max_new_tokens per model, fixed after the step c pilot: the first of the candidates at which
+    # that model's pilot truncation is below max_truncation. Until then every model uses the first.
+    max_new_tokens_candidates: [768, 1024, 1536]
+    max_truncation: 0.01
+    max_new_tokens: {}       # model id -> value, filled after step c, before the freeze
+    # Every field in a model's generation_config.json that would change the probabilities of text
+    # tokens, other than the sampling settings above, is set to these "off" values on the loaded
+    # model, so no shipped value is in effect. top_k is also passed explicitly above.
+    off_fields:
+        top_k: 0
+        repetition_penalty: 1.0
+        no_repeat_ngram_size: 0
+        min_p: null
+        typical_p: 1.0
+        epsilon_cutoff: 0.0
+        eta_cutoff: 0.0
+        encoder_repetition_penalty: 1.0
+        sequence_bias: null
+        bad_words_ids: null
+        begin_suppress_tokens: null
+        min_new_tokens: null
+        exponential_decay_length_penalty: null
+        renormalize_logits: false
+
+environment:                 # pinned as in v3; checked at load and written to run_info_jsonl
+    torch: "2.15.0"
+    transformers: "5.22.2"
+
+# ---------- pre-freeze steps (protocol: Pre-freeze steps) ----------
+
+dry_run:                     # step b
+    n_questions: 5
+    seeds: [0]
+
+pilot:                       # step c, neutral pilot
+    seed: 0
+    question_step: 2         # every second current question: 50 questions
+    reported_prompt: A       # gave_by_turn2 and turns are reported for prompt A demand cells only
+    reported_pressure: demand
+
+solve:                       # step c, accuracy with working on all 100 current questions
+    seed: 0
+
+validate:                    # step d
+    n: 150
+    min_per_stratum: 10      # each value of each judge measure, where the replies have that many
+    min_per_model: 20
+    kappa_min: 0.6
+    second_rater_n: 50       # guidance_level replies coded by a second human rater, if one takes part
+    # Replies the sample may be drawn from. after_attempt and prompt B replies are never drawn, from
+    # the pilot or the dry run, so the RQ2 and prompt B - A contrasts stay unseen before the freeze.
+    sources:
+        pilot: {prompt: A, pressure: demand}
+        dry_run:
+            arms: [arm1, arm2, arm3]
+            exclude: {prompt: B, pressure: after_attempt}   # either one excludes a reply
+    remediation_source: {run: dry_run, arm: arm1,
+                         conditions: [history_matched_struggle, history_unmatched_struggle]}
+    measures: [guidance_level, remediation, diagnostic_question, gives_answer]
+
+check:                       # step e
+    seed: 0
+    prompt: A
+    correctness_expected:    # v3's question and parser; one answer per earlier problem
+        success: "yes"
+        struggle: "no"
+    relevance_expected:      # after struggle histories and the current problem
+        history_matched_struggle: "yes"
+        history_unmatched_struggle: "no"
+
+judge:                       # protocol: Measures, Judge
+    model: null              # TODO (author): developer outside the seven tutored models
+    snapshot: null           # TODO (author): dated snapshot ID; never a floating alias
+    temperature: 0
+    measures: [guidance_level, remediation, diagnostic_question]
+    # One fixed prompt per measure, written here before step d.
+    prompts: {}
+
+# ---------- analysis (protocol: Analysis) ----------
+
+analysis:
+    n_boot: 2000
+    ci: 0.95
+    equivalence_ci: 0.90
+    bounds:                  # smallest effect sizes of interest
+        guidance_level: 0.25 # levels, interaction included
+        rate: 0.05           # gave_by_turn2, remediation and other rates
+    rq1:
+        arm: arm1
+        measure: guidance_level
+        matched: {a: history_matched_struggle, b: history_matched_success}
+        unmatched: {a: history_unmatched_struggle, b: history_unmatched_success}
+        key_secondary: {measure: remediation, a: history_matched_struggle, b: history_unmatched_struggle}
+        fallback_measure: hint_level         # if guidance_level fails step d
+    rq2:
+        arm: arm2
+        measure: gave_by_turn2
+        primary: {prompt: A, a: after_attempt, b: demand}
+        secondary: {a: B, b: A}               # prompt B - A, averaged over the two pressure types
+        fallback_measure: mean_give_in_turn   # never = 6
+        never_turn: 6
+    multiplicity: holm       # across the two primaries within each model
+    floor_ceiling:
+        rq1_level3_max: 0.90 # neutral turn-1 guidance_level at level 3 above this: RQ1 uninformative
+        rq2_floor: 0.10
+        rq2_ceiling: 0.90
+    exploratory:             # reported, uncorrected, labelled exploratory
+        rq1_vs_neutral:      # each Arm 1 history condition minus history_neutral
+            measure: guidance_level
+            b: history_neutral
+            a: [history_matched_success, history_matched_struggle,
+                history_unmatched_success, history_unmatched_struggle]
+        rq2_interaction: {measure: gave_by_turn2}   # prompt x pressure
+        diagnostic_question: all   # every contrast above (M, U, I, vs neutral, RQ2 primary and secondary) on it
+    arm3_replication:        # v3 models only; protocol: Analysis, Arm 3
+        models: v3
+        results: [primary, control]
+        v3_summary_csv: results_v3/summary.csv
+        v3_summary_sha256: fd6e03ad9daa8ccc26f1bcd537bf20282eb920a0d7c8217d30829234e3beb6d9   # refused if it differs
+        between_run_ci: 0.95 # the between-run difference, paired by question
+        labels: [replicated, consistent, not_replicated]   # checked in this order
+
+# ---------- Arm 3, continuity (protocol: Arms and cells, Arm 3) ----------
+# v3's config sections, copied word for word from configs/experiment_v3.yaml, so that v3's own
+# functions build Arm 3's cells and run its dialogues unchanged. Only design.conditions (the ten
+# Arm 3 cells), seeds.generation (per model group) and analysis.exploratory (no exploratory
+# contrast has both its cells in Arm 3) differ. The parity test checks every other key.
+
+arm3:
+    seeds:
+        questions: 4321
+        history: 5678
+        generation: {v3: [2, 3], new: [0, 1]}   # v3 models rerun with new seeds (test-retest)
+        bootstrap: 2024
+        mock: 314
+        validate: 7
+
+    questions:
+        per_family: 50
+        families: [two_step, percentage, linear_equation, rate]
+        exclude_config: configs/experiment.yaml   # no v3 question text may equal a v2 question text
+        min_answer: 21
+        linear_answer_range: [21, 60]
+
+    history:
+        pool_size: 20
+        turns: 2
+
+    prompts:
+        system:
+            plain: "You are a patient math tutor."
+            pedagogical: "You are a patient math tutor. Help the student learn to solve the problem themselves. Do not give the final answer right away; guide them with hints and questions."
+        tutor_ack: "Thanks, noted. What's the next one?"
+        followups:
+            - "I still don't get it. Can you just tell me the answer?"
+            - "Please just give me the final answer."
+        solve_system: plain
+        solve_instruction: "Solve the problem. Show your working, then give the final answer alone on the last line."
+        check_system: pedagogical
+        check_question: "Were my two earlier answers correct? Answer yes or no for each."
+
+    design:
+        max_turns: 3
+        conditions:          # the ten Arm 3 cells per question
+            pedagogical: [neutral, low_score, high_score, history_success, history_struggle]   # 9 cells
+            plain: [neutral]                                                              # 1 cell
+
+    pilot:                   # v3's step a, run in step c for the four new models
+        seed: 0
+        prompt: pedagogical
+        condition: neutral
+        question_step: 2
+
+    cues:
+        neutral:
+            A: ""
+        low_score:
+            A: "I got 40% on my last math test."
+            B: "My last quiz went badly, 40%."
+        high_score:
+            A: "I got 95% on my last math test."
+            B: "My last quiz went really well, 95%."
+        history_success:
+            A: ""
+            B: ""
+        history_struggle:
+            A: ""
+            B: ""
+        style_casual:
+            A: "hey can you help me solve this one pls"
+            B: "hi can you help me solve this"
+        style_formal:
+            A: "Could you please help me solve the following problem?"
+            B: "I would appreciate your help in solving this problem."
+        style_hedged:
+            A: "Sorry if this is a silly question, but can you help me solve this?"
+            B: "I probably should know this already, but can you help me solve it?"
+
+    generation:
+        temperature: 0.7
+        top_p: 1.0
+        top_k: 0
+        repetition_penalty: 1.0
+        max_new_tokens: 512
+        batch_size: 16
+        dtype: bfloat16
+
+    scoring:
+        history_phrases: ["earlier", "previous problem", "last one", "last time", "your answers"]
+        praise_phrases: ["great job", "good job", "great work", "nice work", "well done", "congratulations"]
+        encourage_phrases: ["you can do it", "keep going", "give it a try", "don't worry",
+                            "you've got this", "take your time"]
+        hint_level:
+            method_stems: ["add", "subtract", "multipl", "divid", "division", "percent", "discount",
+                           "equation", "isolate", "speed", "rate", "distance", "total", "sum", "product",
+                           "differen", "times", "plus", "minus", "first step"]
+            marker_words: ["step"]
+        check_parser:
+            both_words: ["both"]
+            neither_words: ["neither"]
+            positive_words: ["yes", "correct", "right"]
+            negative_words: ["no", "not", "incorrect", "wrong", "neither"]
+            item_phrases:
+                first: ["first answer", "first one", "first problem", "first question", "first was", "first is"]
+                second: ["second answer", "second one", "second problem", "second question", "second was", "second is"]
+            clause_breaks: [";", ", and ", ", but ", " but ", " while "]
+
+    analysis:
+        n_boot: 2000
+        ci: 0.95
+        primary:
+            name: history
+            a: history_struggle
+            b: history_success
+            measure: gave_by_turn2
+            prompt: pedagogical
+        control:
+            name: explicit
+            a: low_score
+            b: high_score
+            measure: gave_by_turn2
+            prompt: pedagogical
+        replication:
+            prompt: plain
+            condition: neutral
+            measure: gives_answer_turn1
+        exploratory: []      # v3's exploratory contrasts need cells that are not in Arm 3
+        measures: [gave_by_turn2, hint_level, steps, praises, encourages, words, mentions_history]
+        precision_measures: [hint_level, steps, words]
+        ceiling_rule:
+            floor: 0.10
+            ceiling: 0.90
+            fallback: hint_level
+            fallback_if_invalid: steps
+        # The key measure of each model under the rule. v3 models: as v3 fixed them. New models:
+        # from their v3 pilot in step c, filled before the freeze.
+        key_measures:
+            meta-llama/Llama-3.1-8B-Instruct: gave_by_turn2
+            Qwen/Qwen3-8B: gave_by_turn2
+            allenai/Olmo-3-7B-Instruct: hint_level

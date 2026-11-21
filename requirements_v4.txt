@@ -1,0 +1,13 @@
+# v4 (docs/protocol_v4.md, Environment). Install in its own virtual environment on the pod;
+# v3's environment is never upgraded. requirements_v4.lock.txt, a pip freeze of the v4
+# environment built from a freeze of v3's environment, is committed before the dry run and
+# pins every package exactly, numpy, pandas and pyyaml included.
+numpy>=1.24
+pandas>=2.0
+pyyaml>=6.0
+pytest>=7.0
+# Only the v4 generation code imports these. Pinned to the versions v3 used (docs/deviations_v3.md).
+# If a model needs a newer version, upgrade only what that model needs, for that model only, and
+# record it in docs/deviations_v4.md. Never rerun a v3 model under an upgraded environment.
+torch==2.15.0
+transformers==5.22.2
