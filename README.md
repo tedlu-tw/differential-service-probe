@@ -337,6 +337,10 @@ Step d, from `results_v3/check_summary.csv`: the history turns under the pedagog
 - **Llama calls about 30% of correct earlier answers wrong** under the pedagogical prompt, on both kinds of problem. For Llama, the `history_success` cue is therefore weaker than intended.
 - **Olmo's unreadable replies are mostly long walk-throughs** whose verdicts are not next to the item names. Its readable replies are almost all right.
 
+### v3 results
+
+The full run is done (see the run log in [docs/deviations_v3.md](docs/deviations_v3.md)). The results are held privately until the planned paper is published.
+
 ### v3 data availability
 
 The raw v3 replies will be held privately, as v2's are, and their archive checksum will be published here.
@@ -350,4 +354,8 @@ The raw v3 replies will be held privately, as v2's are, and their archive checks
 - **v3 does not measure `asks_attempt`.** It was removed before the freeze: it failed step b, and a revised rule would have nearly mirrored `gives_answer` under the pedagogical prompt. The reply texts are kept, so it can be studied later.
 - **The sensitivity runs use the mock,** with each model's turn-1 distributions taken from the pilot of 100 dialogues. Its replies are independent draws, so real replies may be noisier.
 - **Olmo answers 81% of the time in its first reply.** Its `gave_by_turn2` is above the ceiling, so its primary and control contrasts use `hint_level`, which is near its own ceiling. Struggle can raise Olmo's mean `hint_level` by at most about 0.19.
-- **The compute estimate is likely high.** It assumes every condition continues to turns 2 and 3 as often as the neutral pedagogical pilot does.
+- **The compute estimate was high, as expected.** The full run took 10.3 GPU hours of generation, against about 13 estimated at batch size 16.
+- **The floor or ceiling rule uses neutral dialogues, but the primary contrast uses history dialogues,** whose base rates can differ. The rule was applied as frozen, and Olmo's `gave_by_turn2` rows are reported as exploratory.
+- **`praises`, `encourages`, `words` and `mentions_history` were not checked by hand.** Step b covered `hint_level` and `gives_answer` only. The tone results rest on keyword rules.
+- **Olmo truncates 5.1% of replies,** up to 14% in some conditions. A truncated reply that would have given the answer counts as not giving it, and the dialogue continues.
+- **Under the plain prompt, 6 to 8% of Qwen's turn-1 replies are identical across the two seeds,** so the seeds are less independent there.
