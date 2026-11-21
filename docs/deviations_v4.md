@@ -23,5 +23,4 @@ _No v4 run yet._
 
 | Date | Protocol section | What changed | Why | Data seen at that point | Effect on results |
 |---|---|---|---|---|---|
-
-_None so far._
+| 2026-11-21 | Model-specific handling: chat templates (draft, before the freeze) | The three v3 models are rendered exactly as in v3 in all three arms. Text their templates add when a system message is passed is kept as forced text, not removed. This means Llama 3.1's "Cutting Knowledge Date" and "Today Date" lines, and Qwen3's empty thinking block. The rule to remove default date and cutoff lines now applies to the four new models only. | Removing Llama's lines would change v3's rendering in Arm 3, or render Llama two ways within v4. | No v4 data. Templates and model cards only. | None on any contrast: the text is identical in every cell of a model. |

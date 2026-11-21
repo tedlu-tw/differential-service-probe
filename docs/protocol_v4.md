@@ -112,8 +112,10 @@ Every replacement is logged.
 
 Each point is checked for every model before the dry run, and the findings are logged.
 
-**Chat templates: only the protocol's messages are rendered.**
-- Any default system prompt, date or knowledge-cutoff line that a template would add is removed. Mistral's `SYSTEM_PROMPT.txt` is never used. No tools or documents are passed.
+**Chat templates: only the protocol's messages are rendered.** Templates are never edited. Default text is removed only through the template's own options, for example by passing a system message. Any text that remains is recorded as forced text.
+- **Four new models:** any default system prompt, date or knowledge-cutoff line that a template would add is removed. Mistral's `SYSTEM_PROMPT.txt` is never used.
+- **Three v3 models:** rendered exactly as in v3 (see below).
+- No tools or documents are passed to any model.
 - If a template forces text that cannot be removed, it is recorded exactly and kept identical in every cell for that model. The work stops only if that is impossible.
 - If a model has no system role, the v3 fallback is used: the system prompt is added to the start of the first user message. `system_mode` is recorded.
 
@@ -126,7 +128,13 @@ What the templates of the four new models do, checked at the revisions above:
 | Granite 4.1 8B | Yes | None. System text is added only for tools or documents, which v4 does not pass | None |
 | Phi-4 | Yes | None | None |
 
-The three v3 models are rendered exactly as in v3.
+**The three v3 models are rendered exactly as in v3, in all three arms.** Text their templates add when a system message is passed is kept and recorded as forced text, because removing it would change v3's rendering in Arm 3. It is identical in every cell.
+
+| Model | System role | Default text when a system message is passed | Forced text |
+|---|---|---|---|
+| Llama 3.1 8B | Yes | Two lines at the start of the system message: "Cutting Knowledge Date: December 2023" and "Today Date: 26 Jul 2024". These are kept as forced text, as in v3. This comes from Meta's published Llama 3.1 template. The repo is gated, so the exact text at v3's revision is checked on the pod before the dry run | The two lines |
+| Qwen3 8B | Yes | None | With thinking off, the generation prompt ends with an empty thinking block, `<think>\n\n</think>\n\n` |
+| Olmo 3 7B | Yes | None. The default "function-calling assistant" system prompt is used only when no system message is passed | None |
 
 **Ministral tokenizer.** Mistral's model card recommends its `mistral-common` tokenizer. That is an extra package, and it encodes messages itself, so it does not fit v3's render-then-tokenize code.
 - **Decided:** the official repo's `tokenizer.json` and `chat_template.jinja`, through v3's rendering, with no new package.
@@ -355,7 +363,7 @@ Apply the replacement rule here if needed. No contrasts are computed.
 
 **d) Judge validation.** 150 replies.
 - **Sample:**
-    - drawn only from the neutral pilot's prompt A `demand` cells and from the dry run. The pilot's `after_attempt` and prompt B replies are excluded, so they stay unseen before the freeze,
+    - drawn only from the neutral pilot's prompt A `demand` cells and from the dry run. Every `after_attempt` reply and every prompt B reply is excluded, from the pilot and from the dry run alike, so they stay unseen before the freeze,
     - stratified by the judge's output and by model (at least 20 per model),
     - each `guidance_level` value at least 10 times wherever the replies have that many,
     - the `remediation` items drawn from the dry run's Arm 1 struggle cells.
@@ -429,7 +437,8 @@ Outputs go to `results_v4/`, which is gitignored. The run log in `docs/deviation
 - the item bank rules,
 - judge caching,
 - the relevance parser,
-- a parity test: Arm 3's config sections equal v3's, and v3's code with the Arm 3 config produces v3's 200 questions and cells.
+- a parity test: Arm 3's config sections equal v3's, and v3's code with the Arm 3 config produces v3's 200 questions and cells,
+- a rendering test for the three v3 models: the v4 loader's rendered contexts equal rendering through v3's own code path byte for byte, in all arms, with Llama's date at "26 Jul 2024". It runs where the tokenizers are available (on the pod, for gated Llama).
 
 All v2 and v3 tests keep passing.
 
