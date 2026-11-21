@@ -15,6 +15,8 @@ Kept from the start of v3, as required by `docs/protocol_v3.md`. Add a row to th
 
 ## Deviations
 
+Every row below was made before the `protocol-v3` tag. There was no deviation after the freeze.
+
 | Date | Protocol section | What changed | Why | Data seen at that point | Effect on results |
 |---|---|---|---|---|---|
 | 2026-11-12 | Analysis: Sensitivity (draft, before the freeze) | The `hint_level` and `steps` sweeps draw from each model's own pilot distribution instead of one shared one; sizes a distribution cannot reach are reported as not plantable; `min_detectable_diff` is per model. The `gave_by_turn2` sweep is unchanged and shared. | The pilot's turn-1 distributions differ too much between models for one base (Llama `hint_level` 88% at level 1, Olmo 81% at level 3). | Step a pilot summary (neutral, pedagogical, 100 questions, 1 seed). No contrast data. | Changes only the sensitivity table and `min_detectable_diff`; no reply or contrast. |

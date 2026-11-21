@@ -190,7 +190,7 @@ echo "3aba09bccea9b8031d781892ee066b3419343995a4ccd8a7b862a2b70cce0e26  v2-resul
 
 ## v3: multi-turn dialogues
 
-**Status: frozen (tag `protocol-v3`).** The design is in [docs/protocol_v3.md](docs/protocol_v3.md). Two kinds of entry go in [docs/deviations_v3.md](docs/deviations_v3.md):
+**Status: closed (tag `v3-results`).** The protocol was frozen at tag `protocol-v3` before the full run, and nothing changed after the freeze. The design is in [docs/protocol_v3.md](docs/protocol_v3.md). Two kinds of entry go in [docs/deviations_v3.md](docs/deviations_v3.md):
 - every real-model run, the pre-freeze steps included,
 - every departure from the protocol.
 
