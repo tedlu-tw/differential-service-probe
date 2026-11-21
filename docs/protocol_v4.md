@@ -182,6 +182,8 @@ The four rules:
 **Current questions and history pool.**
 - **Current questions:** 100 in all, 25 per family.
 - **History pool:** 50 items per family, disjoint from the current questions.
+    - **Pool texts may repeat v2 and v3 questions.** Only current questions must differ from v2 and v3. The rate template has only 115 possible texts, and v2 and v3 used 75 of them, so 50 new rate pool items do not exist. With the v4 seed, 42 of the 50 rate pool items and 19 of the 50 percentage pool items repeat a v2 or v3 text; no two-step or linear-equation pool item does.
+    - **No current question repeats a pool item,** and no text appears twice within either set.
 
 **Number rules.**
 - **Correct answers:**
@@ -345,13 +347,16 @@ In this order, all logged in `docs/deviations_v4.md`.
 - the number rules,
 - the unmatched-family balance.
 
+**Pod checkpoint, before the dry run.** The full test suite runs on the pod, in the v4 environment, with Hugging Face access to Llama, so that none of the pod-only tests is skipped. These are the Llama template tests, the stop sets, and v3 rendering byte for byte. The result (passed, failed and skipped counts, and any skip reason) is recorded in the run log. Any failure or skip of a pod-only test stops the work before the dry run.
+
 **b) Dry run, per model.** 5 questions × every cell of the three arms × 1 seed. Check:
 - loading, versions and revision,
 - templates, forced text and `system_mode`,
 - thinking-tag stripping,
 - the effective generation settings,
 - empty replies and timing,
-- how replies end, per model: the share that end on a stop token, and the share cut off at `max_new_tokens`.
+- how replies end, per model: the share that end on a stop token, and the share cut off at `max_new_tokens`,
+- tokenizer round trip, for all seven models: the share of replies whose token IDs (special tokens left out) differ when their decoded text is re-encoded. A reply is fed back as text, so a difference means the model sees other tokens on the next turn. For Ministral, this is reported both with and without `fix_mistral_regex`.
 
 Apply the replacement rule here if needed. No contrasts are computed.
 
