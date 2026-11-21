@@ -73,10 +73,12 @@ def max_new_tokens(gen, model_id):
 
 # ---------- rendering ----------
 
-def check_forced_text(prompt, forced):
-    """Forced text, if any, must appear in every rendered context, exactly once."""
-    if forced and prompt.count(forced) != 1:
-        raise RuntimeError(f"forced text {forced!r} appears {prompt.count(forced)} times in a rendered context")
+def check_forced_text(prompt, forced, expected):
+    """Forced text, if any, must appear in every rendered context exactly as often as the config
+    records (measured on the real template in 5-turn dialogues)."""
+    if forced and prompt.count(forced) != expected:
+        raise RuntimeError(f"forced text {forced!r} appears {prompt.count(forced)} times in a rendered "
+                           f"context, expected {expected}")
     return prompt
 
 
@@ -128,17 +130,25 @@ def trim_padding(ids, pad_id):
 
 # ---------- GPU: load, render, generate ----------
 
+def load_tokenizer_v4(spec):
+    """The tokenizer at the fixed revision, left padding as in v3, with any tokenizer options the
+    config records (Ministral: transformers' fix_mistral_regex). Also used by the template tests."""
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(spec["id"], revision=spec["revision"], padding_side="left",
+                                              **spec.get("tokenizer_kwargs", {}))
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
+
+
 def load_model_v4(spec, cfg):
     """Load one model at its fixed revision and class, as v3's load_model otherwise does it:
     left padding, the end-of-sequence token as pad if there is none, bf16, cuda, eval mode."""
     import torch
     import transformers
-    from transformers import AutoTokenizer
     check_versions(cfg["environment"], package_versions())
     rev = spec["revision"]
-    tokenizer = AutoTokenizer.from_pretrained(spec["id"], revision=rev, padding_side="left")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = load_tokenizer_v4(spec)
     model_class = getattr(transformers, spec["auto_class"])
     model = model_class.from_pretrained(spec["id"], revision=rev, dtype=getattr(torch, cfg["generation"]["dtype"]))
     model = model.to("cuda").eval()
@@ -154,7 +164,8 @@ def render_parts(tokenizer, spec):
     kwargs = spec.get("chat_template_kwargs", {})
     mode = g.system_mode(tokenizer, kwargs)
     prepare = (lambda messages: messages) if mode == "system_role" else g.prepend_system
-    render = lambda messages: check_forced_text(g.render(tokenizer, messages, kwargs), spec["forced_text"])
+    render = lambda messages: check_forced_text(g.render(tokenizer, messages, kwargs), spec["forced_text"],
+                                                spec["forced_text_count"])
     return mode, prepare, render
 
 

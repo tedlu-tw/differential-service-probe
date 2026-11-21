@@ -109,7 +109,10 @@ arms:
 # ---------- models (protocol: Models, Model-specific handling) ----------
 # group v3: rendered exactly as in v3, Arm 3 seeds 2 and 3. group new: Arm 3 seeds 0 and 1.
 # forced_text: text the template adds that is kept, recorded exactly and checked in every rendered
-# context. suppress_tokens: the list shipped in generation_config.json; loading fails if it differs.
+# context; forced_text_count: how often it appears in one context, measured on the real template in
+# 5-turn dialogues. end_of_turn: the token that ends a reply, which the stop set must contain.
+# marker_tokens: thinking markers that must each be one token, so stripping can work on token ids.
+# suppress_tokens: the list shipped in generation_config.json; loading fails if it differs.
 models:
     - id: meta-llama/Llama-3.1-8B-Instruct
       group: v3
@@ -117,6 +120,8 @@ models:
       auto_class: AutoModelForCausalLM
       # Meta's published template; the exact text at this revision is checked on the pod before the dry run.
       forced_text: "Cutting Knowledge Date: December 2023\nToday Date: 26 Jul 2024\n\n"
+      forced_text_count: 1                      # in the system message, once; confirmed on the pod (gated)
+      end_of_turn: "<|eot_id|>"
       suppress_tokens: []
     - id: Qwen/Qwen3-8B
       group: v3
@@ -125,12 +130,17 @@ models:
       chat_template_kwargs:
           enable_thinking: false
       forced_text: "<think>\n\n</think>\n\n"
+      forced_text_count: 1                      # measured: once at turns 1 to 5, with or without history
+      end_of_turn: "<|im_end|>"
+      marker_tokens: ["<think>", "</think>"]     # each one token (added, not special)
       suppress_tokens: []
     - id: allenai/Olmo-3-7B-Instruct
       group: v3
       revision: 6e5971d9eba42665f5bd5a0fcf047f299ce1dccc
       auto_class: AutoModelForCausalLM
       forced_text: ""
+      forced_text_count: 0
+      end_of_turn: "<|im_end|>"
       suppress_tokens: []
     - id: google/gemma-4-12B-it
       group: new
@@ -139,6 +149,9 @@ models:
       chat_template_kwargs:
           enable_thinking: false
       forced_text: "<|channel>thought\n<channel|>"
+      forced_text_count: 1                      # measured: once at turns 1 to 5, with or without history
+      end_of_turn: "<turn|>"
+      marker_tokens: ["<|channel>", "<channel|>"]   # each one special token
       thinking_block: {open: "<|channel>thought\n", close: "<channel|>"}    # empty blocks in a reply are stripped
       suppress_tokens: [258882, 258883]          # <image|>, <audio|>
     - id: mistralai/Ministral-3-8B-Instruct-2512-BF16
@@ -146,18 +159,26 @@ models:
       revision: f6fae9795746f63c9be8344932f01275f3c63734
       auto_class: AutoModelForImageTextToText    # Mistral3ForConditionalGeneration, as on the model card
       forced_text: ""
+      forced_text_count: 0
+      end_of_turn: "</s>"
+      tokenizer_kwargs:                        # transformers' own fix for the repo's tokenizer regex
+          fix_mistral_regex: true
       suppress_tokens: []
     - id: ibm-granite/granite-4.1-8b
       group: new
       revision: 1504002f650e656a0a3789d99574df12e3e94ed0
       auto_class: AutoModelForCausalLM
       forced_text: ""
+      forced_text_count: 0
+      end_of_turn: "<|end_of_text|>"
       suppress_tokens: []
     - id: microsoft/phi-4
       group: new
       revision: 2db69c1c3e91a05d2c64a3185acfbaf36f744e25
       auto_class: AutoModelForCausalLM
       forced_text: ""
+      forced_text_count: 0
+      end_of_turn: "<|im_end|>"
       suppress_tokens: []
 
 # Any of these in a reply fails loudly, except an empty block a model's thinking_block strips.
