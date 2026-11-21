@@ -72,6 +72,78 @@ def test_effective_settings_and_token_limit():
     assert m.max_new_tokens({**CFG["generation"], "max_new_tokens": {"microsoft/phi-4": 1024}}, "microsoft/phi-4") == 1024
 
 
+def test_resolved_settings_have_a_whole_token_limit():
+    for model in ("microsoft/phi-4", "Qwen/Qwen3-8B"):
+        for arm in ("arm1", "arm2"):
+            gen = m.resolved_generation(CFG, model, arm)
+            assert gen["max_new_tokens"] == 768 and type(gen["max_new_tokens"]) is int      # before the pilot
+            assert {k: gen[k] for k in ("temperature", "top_p", "top_k", "repetition_penalty")} == \
+                {"temperature": 0.7, "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0}
+        assert m.resolved_generation(CFG, model, "arm3")["max_new_tokens"] == 512
+    after = {**CFG, "generation": {**CFG["generation"], "max_new_tokens": {"microsoft/phi-4": 1024}}}
+    assert m.resolved_generation(after, "microsoft/phi-4", "arm1")["max_new_tokens"] == 1024
+    assert m.resolved_generation(after, "Qwen/Qwen3-8B", "arm1")["max_new_tokens"] == 768
+    broken = {**CFG, "generation": {**CFG["generation"], "max_new_tokens": {"microsoft/phi-4": "1024"}}}
+    with pytest.raises(TypeError, match="whole number"):
+        m.resolved_generation(broken, "microsoft/phi-4", "arm2")
+
+
+class FakeTokenizer:
+    """Token 0 is padding, 1 ends a reply, 10 to 13 a Gemma-style block; 20 and up are words."""
+    pad_token_id, all_special_ids = 0, [0, 1, 10, 13]
+
+    def decode(self, ids, skip_special_tokens=False):
+        words = {**DECODE, 1: "<eos>", **{i: f" w{i}" for i in range(20, 60)}}
+        return "".join(words[i] for i in ids if not (skip_special_tokens and i in self.all_special_ids))
+
+    def encode(self, text, add_special_tokens=False):
+        markers = {"<|channel>thought\n": [10, 11, 12], "<channel|>": [13]}
+        return markers.get(text) or [int(w[1:]) for w in text.split()]
+
+
+def fake_generate_module(rows, seen):
+    """Stands in for v2's generate module: records the settings generate_batch receives."""
+    def generate_batch(model, tokenizer, prompts, gen):
+        seen.append(gen["max_new_tokens"])
+        return [list(r) for r in rows[:len(prompts)]]
+
+    def decode(tokenizer, new, stops, max_new):          # v2's decode, without torch
+        return ([tokenizer.decode(r, skip_special_tokens=True).strip() for r in new],
+                [len(r) == max_new and int(r[-1]) not in stops for r in new])
+    return SimpleNamespace(generate_batch=generate_batch, decode=decode, stop_ids=lambda model, tok: {0, 1})
+
+
+def test_generate_batch_receives_a_whole_token_limit():
+    for arm, expected in (("arm1", 768), ("arm2", 768), ("arm3", 512)):
+        seen, gen = [], m.resolved_generation(CFG, "microsoft/phi-4", arm)
+        g = fake_generate_module([[20, 21, 1, 0]], seen)
+        m.make_generate(None, FakeTokenizer(), SPECS["microsoft/phi-4"], gen, CFG["thinking_markers"], {}, g)(["p"])
+        assert seen == [expected] and type(seen[0]) is int
+
+
+def test_raw_replies_stay_aligned_with_replies():
+    rows = [[20, 21, 1, 0, 0], [10, 11, 12, 13, 22, 1, 0], [23, 24, 25, 26, 27], [28, 1, 0, 0, 0]]
+    stash, gen = {}, m.resolved_generation(CFG, "google/gemma-4-12B-it", "arm1")
+    g = fake_generate_module(rows, [])
+    replies, truncated = m.make_generate(None, FakeTokenizer(), SPECS["google/gemma-4-12B-it"], {**gen, "max_new_tokens": 5},
+                                         CFG["thinking_markers"], stash, g)(["a", "b", "c", "d"])
+    assert len(stash["raw"]) == len(stash["ids"]) == len(replies) == 4
+    assert replies == ["w20 w21", "w22", "w23 w24 w25 w26 w27", "w28"]
+    assert stash["raw"][1].startswith("<|channel>thought\n<channel|>") and "w22" in stash["raw"][1]   # raw keeps the block
+    assert stash["ids"][1] == [22, 1] and truncated == [False, False, True, False]
+    for raw, reply in zip(stash["raw"], replies):
+        assert reply.split()[0] in raw                                                         # same reply, same place
+
+
+def test_roundtrip_diagnostic():
+    tok = FakeTokenizer()
+    assert not m.roundtrip_differs([20, 21, 1, 0], tok)                  # special tokens left out
+    differs = SimpleNamespace(all_special_ids=[], decode=lambda ids, skip_special_tokens: "x",
+                              encode=lambda text, add_special_tokens: [99])
+    assert m.roundtrip_differs([20], differs)
+    assert m.roundtrip_share([[20], [21, 22]], tok) == 0.0
+
+
 def test_forced_text_count_checked():
     assert m.check_forced_text("a<x>b", "<x>", 1) == "a<x>b"
     assert m.check_forced_text("ab", "", 0) == "ab"                 # no forced text: nothing to check

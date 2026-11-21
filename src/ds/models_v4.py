@@ -71,6 +71,24 @@ def max_new_tokens(gen, model_id):
     return gen["max_new_tokens"].get(model_id, gen["max_new_tokens_candidates"][0])
 
 
+SETTINGS = ("temperature", "top_p", "top_k", "repetition_penalty", "batch_size", "dtype")
+
+
+def resolved_generation(cfg, model_id, arm):
+    """One settings dict per model and arm, with a whole number for max_new_tokens. It is what v2's
+    generate_batch and decode, effective_settings and the run log all receive.
+    Arms 1 and 2: the model's pilot value, or the first candidate before the pilot. Arm 3: v3's own
+    settings (512 new tokens)."""
+    if arm == "arm3":
+        gen = dict(cfg["arm3"]["generation"])
+    else:
+        source = cfg["generation"]
+        gen = {**{k: source[k] for k in SETTINGS}, "max_new_tokens": max_new_tokens(source, model_id)}
+    if not isinstance(gen["max_new_tokens"], int) or isinstance(gen["max_new_tokens"], bool):
+        raise TypeError(f"max_new_tokens for {model_id} in {arm} is {gen['max_new_tokens']!r}, not a whole number")
+    return gen
+
+
 # ---------- rendering ----------
 
 def check_forced_text(prompt, forced, expected):
@@ -128,6 +146,22 @@ def trim_padding(ids, pad_id):
     return ids[:end]
 
 
+# ---------- dry-run diagnostic: does a reply's text re-encode to its own tokens? ----------
+
+def roundtrip_differs(ids, tokenizer):
+    """True if a reply's tokens, special tokens left out, differ from re-encoding their decoded
+    text. A reply is fed back as text, so a difference means the model sees other tokens next turn."""
+    special = set(tokenizer.all_special_ids)
+    content = [i for i in ids if i not in special]
+    text = tokenizer.decode(content, skip_special_tokens=True)
+    return tokenizer.encode(text, add_special_tokens=False) != content
+
+
+def roundtrip_share(rows, tokenizer):
+    """Share of replies (lists of token ids) whose text does not re-encode to the same tokens."""
+    return sum(roundtrip_differs(r, tokenizer) for r in rows) / len(rows) if rows else float("nan")
+
+
 # ---------- GPU: load, render, generate ----------
 
 def load_tokenizer_v4(spec):
@@ -178,23 +212,26 @@ def block_ids(tokenizer, block):
     return open_id, close[0]
 
 
-def make_generate(model, tokenizer, spec, gen, markers, stash):
+def make_generate(model, tokenizer, spec, gen, markers, stash, g=None):
     """generate(prompts) -> (replies, truncated) for make_reply_fn, using v2's generate_batch and
-    decode unchanged. Raw replies, decoded with special tokens kept, go to stash["raw"]."""
-    from ds import generate as g
-    stops, block = g.stop_ids(model, tokenizer), spec.get("thinking_block")
+    decode unchanged. gen is the resolved settings dict (resolved_generation). For each batch,
+    stash["raw"] holds the raw replies (special tokens kept) and stash["ids"] the reply tokens
+    after stripping, both in the order of the replies. g is v2's generate module; tests pass a fake."""
+    if g is None:
+        from ds import generate as g
+    stops, block, pad = g.stop_ids(model, tokenizer), spec.get("thinking_block"), tokenizer.pad_token_id
     special = lambda ids: tokenizer.decode(ids, skip_special_tokens=False)
     ids_of_block = block_ids(tokenizer, block) if block else None
 
     def generate(prompts):
-        rows = [r.tolist() for r in g.generate_batch(model, tokenizer, prompts, gen)]
-        raw = [special(trim_padding(r, tokenizer.pad_token_id)) for r in rows]
+        rows = [list(map(int, r)) for r in g.generate_batch(model, tokenizer, prompts, gen)]
         kept = [strip_empty_blocks(r, *ids_of_block, block["open"] + block["close"], special)
                 if block else r for r in rows]
         for r in kept:
-            check_no_thinking(special(trim_padding(r, tokenizer.pad_token_id)), markers)
+            check_no_thinking(special(trim_padding(r, pad)), markers)
         _, truncated = g.decode(tokenizer, rows, stops, gen["max_new_tokens"])      # on the tokens as generated
         replies, _ = g.decode(tokenizer, kept, stops, gen["max_new_tokens"])       # text without empty blocks
-        stash["raw"] = raw
+        stash["raw"] = [special(trim_padding(r, pad)) for r in rows]
+        stash["ids"] = [trim_padding(r, pad) for r in kept]
         return replies, truncated
     return generate

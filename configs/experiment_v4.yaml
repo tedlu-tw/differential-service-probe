@@ -224,6 +224,10 @@ environment:                 # pinned as in v3; checked at load and written to r
 dry_run:                     # step b
     n_questions: 5
     seeds: [0]
+    # Tokenizer round trip: every model with its own tokenizer, and these models again with the
+    # tokenizer options below instead of their configured ones.
+    roundtrip_also:
+        mistralai/Ministral-3-8B-Instruct-2512-BF16: {fix_mistral_regex: false}
 
 pilot:                       # step c, neutral pilot
     seed: 0
