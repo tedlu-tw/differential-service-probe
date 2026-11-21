@@ -46,6 +46,7 @@ seeds:
 items:
     families: [two_step, percentage, linear_equation, rate]
     current_per_family: 25
+    max_current_per_family: 38               # step f may raise current_per_family up to this; the rate template allows 38 new questions
     pool_per_family: 50
     min_answer: 21
     linear_answer_range: [21, 60]            # v3's range for Maya's number

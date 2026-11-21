@@ -129,6 +129,9 @@ def make_items(cfg):
     from the current questions. The pool may repeat a v2 or v3 text: the rate template has only 115
     texts, and v2 and v3 used 75 of them, so 50 new rate pool items do not exist."""
     it, rng = cfg["items"], np.random.default_rng(cfg["seeds"]["items"])
+    if it["current_per_family"] > it["max_current_per_family"]:
+        raise ValueError(f"current_per_family {it['current_per_family']} is above the cap of "
+                         f"{it['max_current_per_family']} (protocol: step f)")
     seen, blocked = earlier_texts(cfg), fixed_numbers(cfg)
     current = [q for f in it["families"] for q in
                draw_items(f, it["current_per_family"], cfg, rng, seen, "v4", lambda q: is_valid_current(q, cfg, blocked))]

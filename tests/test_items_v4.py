@@ -134,3 +134,12 @@ def test_unmatched_families_balanced(bank):
 
 def test_bank_is_reproducible(bank):
     assert make_bank(CFG) == bank
+
+
+def test_current_questions_capped_at_38_per_family():
+    """Step f may add current questions, up to 38 per family: the rate template allows no more."""
+    raised = {**CFG, "items": {**CFG["items"], "current_per_family": 38}}
+    assert len(make_bank(raised)["current"]) == 152
+    over = {**CFG, "items": {**CFG["items"], "current_per_family": 39}}
+    with pytest.raises(ValueError, match="cap"):
+        make_bank(over)
