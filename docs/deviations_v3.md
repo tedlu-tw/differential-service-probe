@@ -13,6 +13,28 @@ Kept from the start of v3, as required by `docs/protocol_v3.md`. Add a row to th
 | 2026-11-12 | d (manipulation check) | a085b12 | Llama 3.1 8B, Qwen3 8B, Olmo 3 7B | NVIDIA A40 × 1, 46 GB | 16 | 23.7 min of generation (sum of batch times; model loading not included) | Not resumed. 2,400 replies (200 questions × 2 history conditions × 2 phrasings × 3 models), none empty, no `<think>`, 1 truncated, all `system_role`. `check_summary.csv` rebuilt locally byte-identical. Accuracy over readable replies (unparsed rate), struggle / success: Llama 0.91 (2.8%) / 0.70 (1.3%); Qwen 0.98 (2.3%) / 1.00 (0%); Olmo 0.97 (37.3%) / 0.99 (19.5%). Llama calls about 30% of the correct earlier answers wrong, on both kinds of problem. Most of Olmo's unreadable replies are long walk-throughs whose verdicts are not next to the item names. The commits after a085b12 (removing `asks_attempt`) do not touch the check cells, the check parser or generation. |
 | 2026-11-12 to 2026-11-13 | Full run | protocol-v3 | Llama 3.1 8B, Qwen3 8B, Olmo 3 7B | NVIDIA A40 × 1, 46 GB | 16 | Started about 16:00 on 2026-11-12 (UTC+8). 10.3 h of generation (Llama 2.9, Qwen 3.9, Olmo 3.6; sum of batch times; model loading and the mock sensitivity sweeps not included) | First run after the freeze. Run once, not resumed; no errors or out-of-memory messages in the log. 24,000 dialogues (8,000 per model), 44,433 replies, none empty, no `<think>`, all `system_role`. Truncated: Llama 0.07%, Qwen 0.08%, Olmo 5.1%. Checked locally: no duplicate turns, no turn skipped, no reply after an answer was given, no open dialogue stopped before turn 3. All seven analysis files (`dialogues`, `diagnostics`, `answer_turns`, `hint_levels`, `sensitivity`, `summary`, `replication`) rebuilt locally from the copied replies byte-identical. Raw replies held privately. |
 
+## Model revisions and packages
+
+Added 2026-11-21, after v3 was closed. Documentation only: nothing in v3's code, data or results changed. The run log above did not record these. They were recovered from the v3 pod's volume, whose Hugging Face cache and virtual environment were kept.
+
+| Model | Revision (commit) |
+|---|---|
+| meta-llama/Llama-3.1-8B-Instruct | `0e9e39f249a16976918f6564b8830bc894c89659` |
+| Qwen/Qwen3-8B | `b968826d9c46dd6066d109eabc6255188de91218` |
+| allenai/Olmo-3-7B-Instruct | `6e5971d9eba42665f5bd5a0fcf047f299ce1dccc` |
+
+- **Revisions:** the cache holds exactly one revision of each model. For Qwen and Olmo, these are also the revisions current on Hugging Face from before 2026-11-10 to the start of the full run; neither repo changed in that time.
+- **Packages:** Python 3.12.3, torch 2.15.0, transformers 5.22.2. Both packages were installed on 2026-11-11, before the first v3 run, and not reinstalled since. The pod's driver reports CUDA 13.2.
+- **Generation configs:** the fields each model's `generation_config.json` sets that change sampling:
+
+  | Model | Fields |
+  |---|---|
+  | Llama | temperature 0.6, top-p 0.9 |
+  | Qwen | temperature 0.6, top-k 20, top-p 0.95 |
+  | Olmo | temperature 0.6, top-p 0.95, and a limit of 32,768 new tokens |
+
+  v3 passed temperature, top-p, top-k, repetition penalty and the token limit explicitly, so none of these shipped values was in effect, and no other sampling field was active.
+
 ## Deviations
 
 Every row below was made before the `protocol-v3` tag. There was no deviation after the freeze.
