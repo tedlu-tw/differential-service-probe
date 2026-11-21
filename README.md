@@ -159,6 +159,8 @@ To check a copy:
 echo "3aba09bccea9b8031d781892ee066b3419343995a4ccd8a7b862a2b70cce0e26  v2-results.tar.gz" | shasum -a 256 -c
 ```
 
+v2's package versions were not recorded. The environment recorded for v3 was installed on 2026-11-11, after v2's main run on another server, so it does not show v2's versions.
+
 ## Limits
 
 **What the study can and cannot show**
