@@ -343,7 +343,14 @@ The full run is done (see the run log in [docs/deviations_v3.md](docs/deviations
 
 ### v3 data availability
 
-The raw v3 replies will be held privately, as v2's are, and their archive checksum will be published here.
+The raw v3 replies, scores, summaries and run logs are held privately until the planned paper is published, and are available on request. The archive below holds the `results_v3/` folder from the pre-freeze steps and the full run at tag `protocol-v3`, with the pilot, check and full-run logs. Its checksum fixes which data the reported numbers came from.
+
+`v3-results.tar.gz` sha256: `58fd8674bc3dce564d54547a3cc1f1c36fc492cf30383d9d8600761ccf47dc4d`
+
+To check a copy:
+```bash
+echo "58fd8674bc3dce564d54547a3cc1f1c36fc492cf30383d9d8600761ccf47dc4d  v3-results.tar.gz" | shasum -a 256 -c
+```
 
 ### v3 limits
 
