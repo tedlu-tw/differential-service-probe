@@ -39,50 +39,87 @@ def test_versions_checked_exactly():
             "accelerate", "numpy", "pandas", "pyyaml"} <= set(versions)
 
 
-def test_off_fields_switched_off_and_recorded():
-    gc = SimpleNamespace(top_k=64, min_p=0.05, typical_p=1.0, temperature=1.0)
-    changed = m.apply_off_fields(gc, CFG["generation"]["off_fields"])
-    assert gc.top_k == 0 and gc.min_p is None and gc.repetition_penalty == 1.0
-    assert changed["top_k"] == [64, 0] and changed["min_p"] == [0.05, None]
-    assert "typical_p" not in changed                              # already off: nothing to record
-    assert gc.temperature == 1.0                                   # passed explicitly at generation instead
+DEFAULTS = {"num_beams": 1, "temperature": 1.0, "top_k": 50, "top_p": 1.0, "min_p": None, "penalty_alpha": None,
+            "suppress_tokens": None, "eos_token_id": None, "bos_token_id": None, "pad_token_id": None,
+            "do_sample": False, "max_length": 20, "transformers_version": "5.22.2"}
+ALLOWED = CFG["generation"]["allowed_fields"]
 
 
-def test_required_off_fields_listed():
-    required = {"repetition_penalty", "no_repeat_ngram_size", "min_p", "typical_p", "epsilon_cutoff",
-                "eta_cutoff", "top_k"}
-    assert required <= set(CFG["generation"]["off_fields"])
+def test_allowlist_accepts_shipped_kinds_of_field():
+    gemma_like = {**DEFAULTS, "temperature": 1.0, "top_k": 64, "top_p": 0.95, "do_sample": True,
+                  "eos_token_id": [1, 106, 50], "bos_token_id": 2, "pad_token_id": 0,
+                  "suppress_tokens": [258883, 258882], "transformers_version": "5.10.0.dev0"}
+    diff = m.check_generation_config(gemma_like, DEFAULTS, [258882, 258883], ALLOWED)
+    assert diff == {"top_k": 64, "top_p": 0.95, "do_sample": True, "eos_token_id": [1, 106, 50],
+                    "bos_token_id": 2, "pad_token_id": 0, "suppress_tokens": [258883, 258882],
+                    "transformers_version": "5.10.0.dev0"}
+    olmo_like = {**DEFAULTS, "max_new_tokens": 32768, "_from_model_config": True}       # fields the defaults lack
+    assert m.check_generation_config(olmo_like, DEFAULTS, [], ALLOWED) == {"max_new_tokens": 32768,
+                                                                            "_from_model_config": True}
+
+
+@pytest.mark.parametrize("field,value", [("num_beams", 4), ("penalty_alpha", 0.6), ("min_p", 0.05),
+                                         ("num_beam_groups", 2), ("diversity_penalty", 0.5), ("typical_p", 0.9)])
+def test_allowlist_refuses_any_other_field(field, value):
+    with pytest.raises(RuntimeError, match="allowlist"):
+        m.check_generation_config({**DEFAULTS, field: value}, DEFAULTS, [], ALLOWED)
 
 
 def test_suppress_tokens_must_match_record():
-    m.check_suppress_tokens(SimpleNamespace(suppress_tokens=[258883, 258882]), [258882, 258883])
-    m.check_suppress_tokens(SimpleNamespace(suppress_tokens=None), [])
-    m.check_suppress_tokens(SimpleNamespace(), [])
-    for shipped in ([258882], [258882, 258883, 5], None):
+    for shipped in ([258882], [258882, 258883, 5]):
         with pytest.raises(RuntimeError, match="suppress_tokens"):
-            m.check_suppress_tokens(SimpleNamespace(suppress_tokens=shipped), [258882, 258883])
+            m.check_generation_config({**DEFAULTS, "suppress_tokens": shipped}, DEFAULTS, [258882, 258883], ALLOWED)
+    with pytest.raises(RuntimeError, match="suppress_tokens"):
+        m.check_generation_config(DEFAULTS, DEFAULTS, [258882, 258883], ALLOWED)             # recorded but not shipped
 
 
-def test_effective_settings_and_token_limit():
-    gc = SimpleNamespace(min_p=None, suppress_tokens=[1], eos_token_id=[1, 106])
-    gen = {**CFG["generation"], "max_new_tokens": 768}
-    eff = m.effective_settings(gc, gen, {"min_p": None})
-    assert eff["temperature"] == 0.7 and eff["max_new_tokens"] == 768 and eff["eos_token_id"] == [1, 106]
-    assert m.max_new_tokens(CFG["generation"], "microsoft/phi-4") == 768
-    assert m.max_new_tokens({**CFG["generation"], "max_new_tokens": {"microsoft/phi-4": 1024}}, "microsoft/phi-4") == 1024
+def test_effective_settings_record_the_difference():
+    gen = m.resolved_generation(CFG, "microsoft/phi-4", "arm1")
+    eff = m.effective_settings(gen, {"eos_token_id": [100257, 100265]})
+    assert eff["temperature"] == 0.7 and eff["max_new_tokens"] == 768 and eff["do_sample"] is True
+    assert eff["generation_config_diff"] == {"eos_token_id": [100257, 100265]}
 
 
-def test_resolved_settings_have_a_whole_token_limit():
-    for model in ("microsoft/phi-4", "Qwen/Qwen3-8B"):
-        for arm in ("arm1", "arm2"):
-            gen = m.resolved_generation(CFG, model, arm)
-            assert gen["max_new_tokens"] == 768 and type(gen["max_new_tokens"]) is int      # before the pilot
-            assert {k: gen[k] for k in ("temperature", "top_p", "top_k", "repetition_penalty")} == \
-                {"temperature": 0.7, "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0}
-        assert m.resolved_generation(CFG, model, "arm3")["max_new_tokens"] == 512
+def test_versions_checked_against_the_lock():
+    lock = "# pip freeze\nPyYAML==6.0.3\nhuggingface-hub==2.4.0\ntorch==2.15.0\nnumpy==2.0.1\n"
+    parsed = m.parse_lock(lock)
+    assert parsed == {"pyyaml": "6.0.3", "huggingface_hub": "2.4.0", "torch": "2.15.0", "numpy": "2.0.1"}
+    installed = {"pyyaml": "6.0.3", "huggingface_hub": "2.4.0", "torch": "2.15.0", "numpy": "2.0.1"}
+    m.check_against_lock(parsed, installed, ["pyyaml", "huggingface_hub", "torch", "numpy", "accelerate"])
+    with pytest.raises(RuntimeError, match="lock file"):
+        m.check_against_lock(parsed, {**installed, "numpy": "2.0.2"}, ["numpy"])
+    with pytest.raises(RuntimeError, match="lock file"):
+        m.check_against_lock(parsed, {**installed, "accelerate": "1.0"}, ["accelerate"])      # not in the lock
+
+
+def test_environment_check_uses_the_lock_once_it_exists(tmp_path):
+    env = {**CFG["environment"]}
+    installed = {p: "1.0" for p in m.PACKAGES} | {"torch": "2.15.0", "transformers": "5.22.2"}
+    assert m.check_environment(env, installed, tmp_path) is False                         # no lock yet: pins only
+    lines = [f"{p}==1.0" for p in m.PACKAGES if p not in ("torch", "transformers")] + ["torch==2.15.0", "transformers==5.22.2"]
+    (tmp_path / env["lock_file"]).write_text("\n".join(lines) + "\n")
+    assert m.check_environment(env, installed, tmp_path) is True
+    with pytest.raises(RuntimeError, match="lock file"):
+        m.check_environment(env, {**installed, "tokenizers": "9.9"}, tmp_path)
+    with pytest.raises(RuntimeError, match="pins"):
+        m.check_environment(env, {**installed, "torch": "2.16.0"}, tmp_path)
+
+
+def test_settings_per_run():
+    for run in ("arm1", "arm2", "pilot", "solve", "check"):
+        gen = m.resolved_generation(CFG, "microsoft/phi-4", run)
+        assert gen["max_new_tokens"] == 768 and type(gen["max_new_tokens"]) is int
+        assert {k: gen[k] for k in ("temperature", "top_p", "top_k", "repetition_penalty")} == \
+            {"temperature": 0.7, "top_p": 1.0, "top_k": 0, "repetition_penalty": 1.0}
+    for run in ("arm3", "v3_pilot", "v3_solve"):
+        assert m.resolved_generation(CFG, "microsoft/phi-4", run) == CFG["arm3"]["generation"]
     after = {**CFG, "generation": {**CFG["generation"], "max_new_tokens": {"microsoft/phi-4": 1024}}}
-    assert m.resolved_generation(after, "microsoft/phi-4", "arm1")["max_new_tokens"] == 1024
+    assert m.resolved_generation(after, "microsoft/phi-4", "solve")["max_new_tokens"] == 1024
+    assert m.resolved_generation(after, "microsoft/phi-4", "v3_pilot")["max_new_tokens"] == 512
     assert m.resolved_generation(after, "Qwen/Qwen3-8B", "arm1")["max_new_tokens"] == 768
+    for bad in ("dry_run", "Arm1", "full", ""):
+        with pytest.raises(ValueError, match="unknown run"):
+            m.resolved_generation(CFG, "microsoft/phi-4", bad)
     broken = {**CFG, "generation": {**CFG["generation"], "max_new_tokens": {"microsoft/phi-4": "1024"}}}
     with pytest.raises(TypeError, match="whole number"):
         m.resolved_generation(broken, "microsoft/phi-4", "arm2")
@@ -133,6 +170,18 @@ def test_raw_replies_stay_aligned_with_replies():
     assert stash["ids"][1] == [22, 1] and truncated == [False, False, True, False]
     for raw, reply in zip(stash["raw"], replies):
         assert reply.split()[0] in raw                                                         # same reply, same place
+
+
+def test_failed_batch_carries_its_raw_outputs():
+    rows = [[20, 21, 1], [10, 11, 12, 22, 13, 1], [23, 1, 0]]               # the second holds a non-empty block
+    gen = m.resolved_generation(CFG, "google/gemma-4-12B-it", "arm1")
+    stash = {}
+    generate = m.make_generate(None, FakeTokenizer(), SPECS["google/gemma-4-12B-it"], gen, CFG["thinking_markers"],
+                               stash, fake_generate_module(rows, []))
+    with pytest.raises(m.GenerationFailure, match="non-empty") as caught:
+        generate(["a", "b", "c"])
+    assert len(caught.value.raw) == 3 and "w22" in caught.value.raw[1]
+    assert "raw" not in stash                                                 # nothing half-written for the batch
 
 
 def test_roundtrip_diagnostic():
@@ -249,6 +298,16 @@ def test_thinking_markers_are_single_tokens(loaded):
         assert {"<|channel>", "<channel|>"} <= set(tok.all_special_tokens) | \
             {t.content for t in tok.added_tokens_decoder.values() if t.special}
         assert m.block_ids(tok, spec["thinking_block"]) == tuple(tok.convert_tokens_to_ids(["<|channel>", "<channel|>"]))
+
+
+def test_shipped_generation_config_passes_the_allowlist(loaded):
+    """Each model's generation_config.json at its fixed revision, against transformers' defaults.
+    (The config after a full model load is checked again by load_model_v4 on the pod.)"""
+    from transformers import GenerationConfig
+    spec, _ = loaded
+    shipped = GenerationConfig.from_pretrained(spec["id"], revision=spec["revision"]).to_dict()
+    diff = m.check_generation_config(shipped, GenerationConfig().to_dict(), spec["suppress_tokens"], ALLOWED)
+    assert "eos_token_id" in diff, spec["id"]
 
 
 def test_mistral_control_tokens_single(loaded):

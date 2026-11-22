@@ -12,7 +12,11 @@ reply_fn(states) -> [(reply, truncated, raw_reply), ...] for Arms 1 and 2. with_
 make_reply_fn, which gives (reply, truncated), into that shape, from the stash that
 models_v4.make_generate fills for the same batch.
 """
+import json
+from pathlib import Path
+
 from ds.dialogue import by_length, is_finished, messages_for_turn, run_dialogues
+from ds.models_v4 import GenerationFailure
 from ds.score import gives_answer
 
 KEY = ["arm", "question_id", "prompt", "condition", "phrasing", "seed"]
@@ -84,6 +88,30 @@ def run_dialogues_v4(cells, seed, reply_fn, answers, max_turns, batch_size, done
                 bar.update(len(batch))
         if bar:
             bar.close()
+
+
+# ---------- failures ----------
+
+def failure_lines(batch, raw, error, extra):
+    """One JSON line per reply of a failed batch: its dialogue key, turn, raw output and the error."""
+    keys = [k for k in KEY if k in batch[0]] or ["question_id", "prompt", "condition", "phrasing", "seed"]
+    return [json.dumps({**extra, **{k: s.get(k) for k in keys}, "turn": s["turn"], "raw_reply": r, "error": error},
+                       ensure_ascii=False) for s, r in zip(batch, raw)]
+
+
+def log_failures(reply_fn, path, extra=None):
+    """Wrap a reply_fn: if a batch fails a check after generation, append its keys and raw outputs to
+    path before the error stops the run. A restart regenerates that batch from another random state,
+    so without this the failed reply would vanish unrecorded (protocol: Logging)."""
+    def fn(batch):
+        try:
+            return reply_fn(batch)
+        except GenerationFailure as e:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write("\n".join(failure_lines(batch, e.raw, str(e), extra or {})) + "\n")
+            raise
+    return fn
 
 
 # ---------- raw replies ----------

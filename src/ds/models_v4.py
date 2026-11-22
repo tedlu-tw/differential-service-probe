@@ -10,6 +10,7 @@ this module, and its tests, run without them.
 """
 import platform
 from importlib import metadata
+from pathlib import Path
 
 PACKAGES = ["torch", "transformers", "tokenizers", "huggingface_hub", "safetensors", "accelerate",
             "numpy", "pandas", "pyyaml"]
@@ -35,35 +36,67 @@ def check_versions(pinned, installed):
         raise RuntimeError(f"package versions differ from the pins (pinned, installed): {wrong}")
 
 
+def normalise(name):
+    return name.strip().lower().replace("-", "_")
+
+
+def parse_lock(text):
+    """Package -> version from a pip freeze file ("name==version" lines); other lines are skipped."""
+    out = {}
+    for line in text.splitlines():
+        if "==" in line and not line.lstrip().startswith("#"):
+            name, version = line.split("==", 1)
+            out[normalise(name)] = version.strip()
+    return out
+
+
+def check_against_lock(lock, installed, packages=PACKAGES):
+    """Every package in PACKAGES must have the lock's version, or be absent if the lock lacks it."""
+    wrong = {p: (lock.get(normalise(p)), installed.get(p)) for p in packages
+             if lock.get(normalise(p)) != installed.get(p)}
+    if wrong:
+        raise RuntimeError(f"package versions differ from the lock file (locked, installed): {wrong}")
+
+
+def check_environment(env, installed, root="."):
+    """Before any model loads: the pins (torch, transformers), and, once the lock file exists, every
+    package in PACKAGES against it. Returns whether the lock was checked."""
+    check_versions({k: env[k] for k in ("torch", "transformers")}, installed)
+    lock = Path(root) / env["lock_file"]
+    if lock.exists():
+        check_against_lock(parse_lock(lock.read_text()), installed)
+        return True
+    return False
+
+
 # ---------- generation settings ----------
 
-def apply_off_fields(gen_config, off_fields):
-    """Set every listed field to its off value on the model's generation config.
-    Returns the fields whose shipped value was changed, as {field: [shipped, off]}."""
-    changed = {}
-    for field, off in off_fields.items():
-        shipped = getattr(gen_config, field, None)
-        if shipped != off:
-            changed[field] = [shipped, off]
-        setattr(gen_config, field, off)
-    return changed
+def config_diff(loaded, defaults):
+    """Every field of a loaded generation config (as a dict) that differs from transformers' defaults."""
+    return {k: v for k, v in loaded.items() if k not in defaults or defaults[k] != v}
 
 
-def check_suppress_tokens(gen_config, recorded):
-    """The shipped suppress_tokens list must equal the one recorded in the config (protocol)."""
-    shipped = sorted(getattr(gen_config, "suppress_tokens", None) or [])
-    if shipped != sorted(recorded):
-        raise RuntimeError(f"suppress_tokens shipped {shipped}, recorded {sorted(recorded)}")
+def check_generation_config(loaded, defaults, recorded_suppress, allowed):
+    """Allowlist: a loaded generation config may differ from the defaults only in token ids, the
+    recorded suppress_tokens, the settings every generate call passes explicitly, and metadata.
+    Any other non-default field (num_beams, penalty_alpha, min_p, ...) stops the run.
+    Returns the full difference, for the run log."""
+    diff = config_diff(loaded, defaults)
+    ok = set(allowed["token_ids"]) | set(allowed["explicit"]) | set(allowed["metadata"]) | {"suppress_tokens"}
+    other = {k: v for k, v in diff.items() if k not in ok}
+    if other:
+        raise RuntimeError(f"generation config fields not on the allowlist: {other}")
+    shipped = sorted(diff.get("suppress_tokens") or [])
+    if shipped != sorted(recorded_suppress):
+        raise RuntimeError(f"suppress_tokens shipped {shipped}, recorded {sorted(recorded_suppress)}")
+    return diff
 
 
-def effective_settings(gen_config, gen, off_fields):
-    """What is in effect for one run: the explicit sampling settings, then every off field,
-    the suppressed tokens and the end-of-turn tokens, as the loaded model holds them."""
+def effective_settings(gen, diff):
+    """What is in effect for one run: the explicit settings (resolved_generation) and the loaded
+    generation config's difference from the defaults, whose explicit fields the call overrides."""
     explicit = {k: gen[k] for k in ("temperature", "top_p", "top_k", "repetition_penalty", "max_new_tokens")}
-    fields = {k: getattr(gen_config, k, None) for k in off_fields}
-    return {**explicit, "off_fields": fields,
-            "suppress_tokens": getattr(gen_config, "suppress_tokens", None),
-            "eos_token_id": getattr(gen_config, "eos_token_id", None)}
+    return {**explicit, "do_sample": True, "generation_config_diff": diff}
 
 
 def max_new_tokens(gen, model_id):
@@ -73,19 +106,27 @@ def max_new_tokens(gen, model_id):
 
 SETTINGS = ("temperature", "top_p", "top_k", "repetition_penalty", "batch_size", "dtype")
 
+# Which settings each run uses (protocol: Generation settings). Dry-run cells use their own arm's.
+#   v4: Arms 1 and 2, the neutral pilot (Arm 2 cells), v4 accuracy with working, the step e checks.
+#   v3: Arm 3, and v3's step a pilot and its accuracy with working, run for the new models in step c.
+RUN_SETTINGS = {"arm1": "v4", "arm2": "v4", "pilot": "v4", "solve": "v4", "check": "v4",
+                "arm3": "v3", "v3_pilot": "v3", "v3_solve": "v3"}
 
-def resolved_generation(cfg, model_id, arm):
-    """One settings dict per model and arm, with a whole number for max_new_tokens. It is what v2's
+
+def resolved_generation(cfg, model_id, run):
+    """One settings dict per model and run, with a whole number for max_new_tokens. It is what v2's
     generate_batch and decode, effective_settings and the run log all receive.
-    Arms 1 and 2: the model's pilot value, or the first candidate before the pilot. Arm 3: v3's own
-    settings (512 new tokens)."""
-    if arm == "arm3":
+    v4 runs: the model's pilot value, or the first candidate before the pilot. v3 runs: v3's own
+    settings (512 new tokens). Any other run name is refused."""
+    if run not in RUN_SETTINGS:
+        raise ValueError(f"unknown run {run!r}; expected one of {sorted(RUN_SETTINGS)}")
+    if RUN_SETTINGS[run] == "v3":
         gen = dict(cfg["arm3"]["generation"])
     else:
         source = cfg["generation"]
         gen = {**{k: source[k] for k in SETTINGS}, "max_new_tokens": max_new_tokens(source, model_id)}
     if not isinstance(gen["max_new_tokens"], int) or isinstance(gen["max_new_tokens"], bool):
-        raise TypeError(f"max_new_tokens for {model_id} in {arm} is {gen['max_new_tokens']!r}, not a whole number")
+        raise TypeError(f"max_new_tokens for {model_id} in {run} is {gen['max_new_tokens']!r}, not a whole number")
     return gen
 
 
@@ -175,21 +216,23 @@ def load_tokenizer_v4(spec):
     return tokenizer
 
 
-def load_model_v4(spec, cfg):
+def load_model_v4(spec, cfg, root="."):
     """Load one model at its fixed revision and class, as v3's load_model otherwise does it:
-    left padding, the end-of-sequence token as pad if there is none, bf16, cuda, eval mode."""
+    left padding, the end-of-sequence token as pad if there is none, bf16, cuda, eval mode.
+    Refuses to load on a package mismatch or a generation config field off the allowlist."""
     import torch
     import transformers
-    check_versions(cfg["environment"], package_versions())
+    installed = package_versions()
+    check_environment(cfg["environment"], installed, root)
     rev = spec["revision"]
     tokenizer = load_tokenizer_v4(spec)
     model_class = getattr(transformers, spec["auto_class"])
     model = model_class.from_pretrained(spec["id"], revision=rev, dtype=getattr(torch, cfg["generation"]["dtype"]))
     model = model.to("cuda").eval()
-    check_suppress_tokens(model.generation_config, spec["suppress_tokens"])
-    changed = apply_off_fields(model.generation_config, cfg["generation"]["off_fields"])
+    diff = check_generation_config(model.generation_config.to_dict(), transformers.GenerationConfig().to_dict(),
+                                   spec["suppress_tokens"], cfg["generation"]["allowed_fields"])
     return model, tokenizer, {"model": spec["id"], "revision": rev, "precision": str(model.dtype),
-                              "packages": package_versions(), "off_fields_changed": changed}
+                              "packages": installed, "generation_config_diff": diff}
 
 
 def render_parts(tokenizer, spec):
@@ -201,6 +244,14 @@ def render_parts(tokenizer, spec):
     render = lambda messages: check_forced_text(g.render(tokenizer, messages, kwargs), spec["forced_text"],
                                                 spec["forced_text_count"])
     return mode, prepare, render
+
+
+class GenerationFailure(RuntimeError):
+    """A batch failed a check after generation (a non-empty or unclosed thinking block, or a leftover
+    marker). Carries the batch's raw outputs, so they can be logged before the run stops."""
+    def __init__(self, message, raw):
+        super().__init__(message)
+        self.raw = raw
 
 
 def block_ids(tokenizer, block):
@@ -223,15 +274,22 @@ def make_generate(model, tokenizer, spec, gen, markers, stash, g=None):
     special = lambda ids: tokenizer.decode(ids, skip_special_tokens=False)
     ids_of_block = block_ids(tokenizer, block) if block else None
 
+    def checked(rows, raw):
+        try:
+            kept = [strip_empty_blocks(r, *ids_of_block, block["open"] + block["close"], special)
+                    if block else r for r in rows]
+            for r in kept:
+                check_no_thinking(special(trim_padding(r, pad)), markers)
+        except RuntimeError as e:                 # logged by the caller with the batch's keys, then raised
+            raise GenerationFailure(str(e), raw) from e
+        return kept
+
     def generate(prompts):
         rows = [list(map(int, r)) for r in g.generate_batch(model, tokenizer, prompts, gen)]
-        kept = [strip_empty_blocks(r, *ids_of_block, block["open"] + block["close"], special)
-                if block else r for r in rows]
-        for r in kept:
-            check_no_thinking(special(trim_padding(r, pad)), markers)
+        raw = [special(trim_padding(r, pad)) for r in rows]
+        kept = checked(rows, raw)
         _, truncated = g.decode(tokenizer, rows, stops, gen["max_new_tokens"])      # on the tokens as generated
         replies, _ = g.decode(tokenizer, kept, stops, gen["max_new_tokens"])       # text without empty blocks
-        stash["raw"] = [special(trim_padding(r, pad)) for r in rows]
-        stash["ids"] = [trim_padding(r, pad) for r in kept]
+        stash["raw"], stash["ids"] = raw, [trim_padding(r, pad) for r in kept]
         return replies, truncated
     return generate

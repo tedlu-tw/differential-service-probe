@@ -136,6 +136,18 @@ def test_bank_is_reproducible(bank):
     assert make_bank(CFG) == bank
 
 
+def test_adding_questions_only_appends(bank):
+    """Raising current_per_family (step f) appends questions; the earlier questions, the whole pool
+    and every earlier history assignment stay exactly as they were."""
+    raised = make_bank({**CFG, "items": {**CFG["items"], "current_per_family": 26}})
+    for family in CFG["items"]["families"]:
+        before = [q for q in bank["current"] if q["family"] == family]
+        after = [q for q in raised["current"] if q["family"] == family]
+        assert after[:25] == before and len(after) == 26
+    assert raised["pool"] == bank["pool"]
+    assert all(raised["assignment"][q["id"]] == bank["assignment"][q["id"]] for q in bank["current"])
+
+
 def test_current_questions_capped_at_38_per_family():
     """Step f may add current questions, up to 38 per family: the rate template allows no more."""
     raised = {**CFG, "items": {**CFG["items"], "current_per_family": 38}}

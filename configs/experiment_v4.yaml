@@ -30,6 +30,7 @@ paths:
     compute_estimate_csv: results_v4/compute_estimate.csv   # step g
     contexts_csv: results_v4/contexts_turn1.csv      # probe addition: rendered turn-1 text and token ids per cell
     run_info_jsonl: results_v4/run_info.jsonl        # per model and run: revision, precision, packages, effective generation settings
+    failures_jsonl: results_v4/failures.jsonl        # every batch that failed a check after generation: keys, raw outputs, error
     summary_csv: results_v4/summary.csv
     mock_dir: results_v4/mock                        # mock runs, same file names, never mixed with real
 
@@ -197,28 +198,22 @@ generation:                  # Arms 1 and 2; Arm 3 uses arm3.generation
     max_new_tokens_candidates: [768, 1024, 1536]
     max_truncation: 0.01
     max_new_tokens: {}       # model id -> value, filled after step c, before the freeze
-    # Every field in a model's generation_config.json that would change the probabilities of text
-    # tokens, other than the sampling settings above, is set to these "off" values on the loaded
-    # model, so no shipped value is in effect. top_k is also passed explicitly above.
-    off_fields:
-        top_k: 0
-        repetition_penalty: 1.0
-        no_repeat_ngram_size: 0
-        min_p: null
-        typical_p: 1.0
-        epsilon_cutoff: 0.0
-        eta_cutoff: 0.0
-        encoder_repetition_penalty: 1.0
-        sequence_bias: null
-        bad_words_ids: null
-        begin_suppress_tokens: null
-        min_new_tokens: null
-        exponential_decay_length_penalty: null
-        renormalize_logits: false
+    # Allowlist (protocol: Generation settings). Each loaded generation config is compared with
+    # transformers' GenerationConfig() defaults. Only these fields may differ; any other non-default
+    # field (num_beams, num_beam_groups, penalty_alpha, diversity_penalty, min_p, ...) stops the load.
+    # The difference is written to run_info_jsonl. suppress_tokens may differ only as recorded per model.
+    allowed_fields:
+        token_ids: [bos_token_id, eos_token_id, pad_token_id]
+        # Passed explicitly at every generate call, so the shipped value is never in effect.
+        # max_length is overridden by the explicit max_new_tokens.
+        explicit: [do_sample, temperature, top_p, top_k, repetition_penalty, max_new_tokens, max_length]
+        metadata: [transformers_version, _from_model_config]
 
 environment:                 # pinned as in v3; checked at load and written to run_info_jsonl
     torch: "2.15.0"
     transformers: "5.22.2"
+    # Once it exists (first pod session), every package in models_v4.PACKAGES is checked against it at load.
+    lock_file: requirements_v4.lock.txt
 
 # ---------- pre-freeze steps (protocol: Pre-freeze steps) ----------
 

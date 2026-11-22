@@ -122,21 +122,37 @@ def draw_items(family, n, cfg, rng, seen, prefix, check):
     return items
 
 
+def stream(seed, *path):
+    """An independent random stream for one part of the bank, derived from the seed and a fixed path
+    (family index, part), so that drawing more of one part never moves any other part."""
+    return np.random.default_rng([seed, *path])
+
+
+CURRENT, POOL = 0, 1
+
+
 def make_items(cfg):
-    """Current questions (25 per family) first, then the history pool (50 per family), from one seed.
+    """Current questions, then the history pool, each family from its own stream.
+
+    Each family's current questions are always drawn up to the cap (38) and the first
+    current_per_family are used, so raising it (step f) only appends questions. The pool is drawn
+    after excluding all capped current questions, so it never changes when questions are added.
 
     Protocol: every current question differs from every v2 and v3 question, and the pool is disjoint
     from the current questions. The pool may repeat a v2 or v3 text: the rate template has only 115
     texts, and v2 and v3 used 75 of them, so 50 new rate pool items do not exist."""
-    it, rng = cfg["items"], np.random.default_rng(cfg["seeds"]["items"])
+    it, seed = cfg["items"], cfg["seeds"]["items"]
     if it["current_per_family"] > it["max_current_per_family"]:
         raise ValueError(f"current_per_family {it['current_per_family']} is above the cap of "
                          f"{it['max_current_per_family']} (protocol: step f)")
     seen, blocked = earlier_texts(cfg), fixed_numbers(cfg)
-    current = [q for f in it["families"] for q in
-               draw_items(f, it["current_per_family"], cfg, rng, seen, "v4", lambda q: is_valid_current(q, cfg, blocked))]
-    taken = {q["text"] for q in current}
-    pool = {f: draw_items(f, it["pool_per_family"], cfg, rng, taken, "v4h", lambda q: True) for f in it["families"]}
+    capped = {f: draw_items(f, it["max_current_per_family"], cfg, stream(seed, i, CURRENT), seen, "v4",
+                            lambda q: is_valid_current(q, cfg, blocked))
+              for i, f in enumerate(it["families"])}
+    taken = {q["text"] for items in capped.values() for q in items}
+    pool = {f: draw_items(f, it["pool_per_family"], cfg, stream(seed, i, POOL), taken, "v4h", lambda q: True)
+            for i, f in enumerate(it["families"])}
+    current = [q for f in it["families"] for q in capped[f][:it["current_per_family"]]]
     return current, pool
 
 
@@ -152,14 +168,15 @@ def pick(rng, candidates, answer, n, used):
     return [h["id"] for h in chosen]
 
 
-def assign_family(current, pool, cfg, family, rng):
+def assign_family(current, pool, cfg, family_index, family):
     """For each question of one family and each phrasing: two matched items, and two items from one
-    other family. The other families rotate over the 25 questions x 2 phrasings (17, 17, 16 times)."""
-    families, arm = cfg["items"]["families"], cfg["arms"]["arm1"]
+    other family. The other families rotate over the questions x 2 phrasings (17, 17, 16 times for 25).
+    Each question draws from its own stream, so adding questions never changes an earlier assignment."""
+    families, arm, seed = cfg["items"]["families"], cfg["arms"]["arm1"], cfg["seeds"]["assignment"]
     others, out = [f for f in families if f != family], {}
     questions = [q for q in current if q["family"] == family]
     for k, q in enumerate(questions):
-        used, out[q["id"]] = set(), {}
+        rng, used, out[q["id"]] = stream(seed, family_index, k), set(), {}
         for j, phrasing in enumerate(arm["phrasings"]):
             other = others[(k * len(arm["phrasings"]) + j) % len(others)]
             out[q["id"]][phrasing] = {
@@ -170,9 +187,9 @@ def assign_family(current, pool, cfg, family, rng):
 
 
 def assign_histories(current, pool, cfg):
-    rng, out = np.random.default_rng(cfg["seeds"]["assignment"]), {}
-    for family in cfg["items"]["families"]:
-        out.update(assign_family(current, pool, cfg, family, rng))
+    out = {}
+    for i, family in enumerate(cfg["items"]["families"]):
+        out.update(assign_family(current, pool, cfg, i, family))
     return out
 
 

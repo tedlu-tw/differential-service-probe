@@ -1,4 +1,5 @@
 """src/ds/dialogue_v4.py: the Arm 1 and Arm 2 loop, and Arm 3 through v3's run_dialogues."""
+import json
 import random
 from pathlib import Path
 
@@ -6,9 +7,10 @@ import pytest
 
 from ds import load_config
 from ds.dialogue import run_dialogues
-from ds.dialogue_v4 import KEY, dialogue_key, run_arm3, run_dialogues_v4, with_raw
+from ds.dialogue_v4 import KEY, dialogue_key, log_failures, run_arm3, run_dialogues_v4, with_raw
 from ds.items_v4 import attempt_text, make_bank
 from ds.mock import mock_reply_fn, v3_setting
+from ds.models_v4 import GenerationFailure
 from ds.stimuli_v3 import build_cells_v3, make_questions_v3
 from ds.stimuli_v4 import build_cells_v4
 
@@ -105,6 +107,22 @@ def test_raw_replies_aligned_through_batching_by_length(setup):
     rows = run_dialogues_v4(shuffled, 1, Planned(answers, plan_by_hash), answers, MAX_TURNS, 3)
     for r in rows:
         assert r["raw_reply"] == f"RAW|{'|'.join(dialogue_key(r))}|{r['turn']}"
+
+
+def test_failed_batch_logged_before_the_run_stops(setup, tmp_path):
+    cells, answers, _ = setup
+    path = tmp_path / "failures.jsonl"
+
+    def failing(batch):
+        if batch[0]["turn"] == 2:
+            raise GenerationFailure("non-empty thinking block in a reply", [f"raw {i}" for i in range(len(batch))])
+        return Planned(answers, lambda key: None)(batch)
+    with pytest.raises(GenerationFailure):
+        run_dialogues_v4(cells, 0, log_failures(failing, path, {"model": "m", "run": "dry_run"}), answers, MAX_TURNS, BATCH)
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines and {r["turn"] for r in lines} == {2} and all(r["model"] == "m" and r["run"] == "dry_run" for r in lines)
+    assert [r["raw_reply"] for r in lines] == [f"raw {i}" for i in range(len(lines))]
+    assert all({"arm", "question_id", "prompt", "condition", "phrasing", "seed", "error"} <= set(r) for r in lines)
 
 
 def test_with_raw_takes_the_stash_of_the_same_batch():
