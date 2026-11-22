@@ -106,7 +106,7 @@ Every replacement is logged.
     - **When:** the lock is committed before the dry run.
     - **If v3's environment can no longer be frozen from the pod:** that is recorded in `docs/deviations_v4.md`, and the lock is built from the pinned versions (`torch` 2.15.0, `transformers` 5.22.2) alone. The write-up then states that the v3 models' test-retest (Arm 3) ran under a possibly different environment from v3's, in every package other than those two.
 - **Upgrades:** if a model needs a newer version, only what that model needs is upgraded, for that model only, and recorded in `docs/deviations_v4.md`. A v3 model is never rerun under an upgraded environment.
-- **Checks:** versions are checked at load time and written to the run log.
+- **Checks:** before any model loads, `torch` and `transformers` are checked against the pins. Once the lock file exists, every package recorded for the run (`tokenizers`, `huggingface_hub`, `safetensors`, `accelerate`, `numpy`, `pandas`, `pyyaml` and the two pins) is checked against it, and a mismatch stops the run. The versions are written to the run log.
 
 ## Model-specific handling
 
@@ -153,11 +153,22 @@ What the templates of the four new models do, checked at the revisions above:
 
 **Generation settings.**
 - **Sampling, as in v3:** temperature 0.7, top-p 1.0, no top-k. The developers' recommended settings are not used.
-- **Other sampling fields:** every other sampling field that a model's `generation_config.json` sets is switched off, and the full list is written in the config. It includes `repetition_penalty`, `no_repeat_ngram_size`, `min_p`, `typical_p`, `epsilon_cutoff`, `eta_cutoff`, `top_k` and any other field found.
+- **Allowlist for the generation config:** each loaded generation config is compared with transformers' `GenerationConfig()` defaults. Only these fields may differ:
+    - token IDs (`bos_token_id`, `eos_token_id`, `pad_token_id`),
+    - the recorded `suppress_tokens`,
+    - settings every generate call passes explicitly (`do_sample`, `temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_new_tokens`, and `max_length`, which the explicit `max_new_tokens` overrides),
+    - metadata (`transformers_version`, `_from_model_config`).
+
+  Any other non-default field stops the load. This includes fields that change decoding, such as `num_beams`, `num_beam_groups`, `penalty_alpha`, `diversity_penalty` or `min_p`. The difference from the defaults is written to the run log.
 - **Suppressed tokens:** a `suppress_tokens` list that only blocks non-text tokens is kept and recorded. Gemma 4 ships tokens 258882 and 258883, the image and audio end markers. Loading fails if a shipped list differs from the recorded one.
 - **Logging:** the effective settings are logged per model and run.
+- **Settings per run:**
+    - **v4's settings:** Arms 1 and 2, the neutral pilot, v4's accuracy with working, and the step e checks. These use temperature 0.7, top-p 1.0, no top-k, batch size 16, and the model's `max_new_tokens` for Arms 1 and 2 (768 until the pilot fixes it).
+    - **v3's settings (512 new tokens):** Arm 3, and v3's step a pilot and its accuracy with working, run for the new models in step c.
+    - **Dry run:** each cell uses its own arm's settings.
+    - Any other run name is refused.
 - **As in v3:** batch size 16, left padding, seeding.
-- **v3 check:** the v3 check recorded in `docs/deviations_v3.md` found no extra sampling field active in v3, so this rule matches what v3 did.
+- **v3 check:** the v3 check recorded in `docs/deviations_v3.md` found that the three v3 models' generation configs set only token IDs, explicitly passed settings and metadata, so they pass this allowlist, as in v3.
 
 ## Items (new bank, for Arms 1 and 2)
 
@@ -182,7 +193,8 @@ The four rules:
 **Current questions and history pool.**
 - **Current questions:** 100 in all, 25 per family.
 - **History pool:** 50 items per family, disjoint from the current questions.
-    - **Pool texts may repeat v2 and v3 questions.** Only current questions must differ from v2 and v3. The rate template has only 115 possible texts, and v2 and v3 used 75 of them, so 50 new rate pool items do not exist. With the v4 seed, 42 of the 50 rate pool items and 19 of the 50 percentage pool items repeat a v2 or v3 text; no two-step or linear-equation pool item does.
+    - **Pool texts may repeat v2 and v3 questions.** Only current questions must differ from v2 and v3. The rate template has only 115 possible texts, and v2 and v3 used 75 of them, so 50 new rate pool items do not exist. With the v4 seed, 48 of the 50 rate pool items and 18 of the 50 percentage pool items repeat a v2 or v3 text; no two-step or linear-equation pool item does.
+    - **Stable under step f:** each family's current questions are drawn up to the cap (38) and the first `current_per_family` are used. The pool is drawn after excluding all 38 per family, and each family's draws, and each question's history assignment, have their own random stream. Adding current questions in step f therefore only appends questions; the pool and every earlier assignment stay the same.
     - **No current question repeats a pool item,** and no text appears twice within either set.
 
 **Number rules.**
@@ -406,6 +418,10 @@ Every tutor reply is one row. Each row records:
 - arm, seed, question id, condition, phrasing, prompt,
 - turn, raw and stripped reply, `truncated`.
 
+**Failures and restarts.**
+- **failures.jsonl:** a batch that fails a check after generation (a non-empty or unclosed thinking block, or a leftover marker) is appended to `results_v4/failures.jsonl` before the run stops: every reply's dialogue key, turn, raw output and the error. A restart regenerates that batch from a different random state, so without this the failed reply would vanish unrecorded.
+- **Logged and reported:** any such failure in a pilot or the full run, and any other restart of a full run (a resumed run continues from a new random position), is logged in `docs/deviations_v4.md` with its count, and reported in the write-up.
+
 Every judge call is logged with:
 - the judge model version,
 - the prompt id,
@@ -462,6 +478,7 @@ All v2 and v3 tests keep passing.
 
 Known before any v4 run:
 - **The rate family has the least item variety.** The rate template allows only 115 problems in all (23 speeds × 5 durations). v2 and v3 used 75 of them, so 38 new current questions are possible, and most rate pool items repeat a v2 or v3 question.
+- **`history_neutral` matches the other histories in turn structure, but not in length or content.** It has one line ("I worked on this one earlier.") where the others have a worked answer. So each history-minus-neutral contrast mixes correctness information with the amount of work the student shows.
 
 ## Definition of done before the freeze
 
