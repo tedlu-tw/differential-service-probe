@@ -280,8 +280,8 @@ def block_ids(tokenizer, block):
 def make_generate(model, tokenizer, spec, gen, markers, stash, g=None):
     """generate(prompts) -> (replies, truncated) for make_reply_fn, using v2's generate_batch and
     decode unchanged. gen is the resolved settings dict (resolved_generation). For each batch,
-    stash["raw"] holds the raw replies (special tokens kept) and stash["ids"] the reply tokens
-    after stripping, both in the order of the replies. g is v2's generate module; tests pass a fake."""
+    stash["raw"] holds the raw replies (special tokens kept), stash["ids"] the reply tokens after
+    stripping, and stash["ended"] whether each reply ended on a stop token, all in reply order. g is v2's generate module; tests pass a fake."""
     if g is None:
         from ds import generate as g
     stops, block, pad = g.stop_ids(model, tokenizer), spec.get("thinking_block"), tokenizer.pad_token_id
@@ -305,5 +305,6 @@ def make_generate(model, tokenizer, spec, gen, markers, stash, g=None):
         _, truncated = g.decode(tokenizer, rows, stops, gen["max_new_tokens"])      # on the tokens as generated
         replies, _ = g.decode(tokenizer, kept, stops, gen["max_new_tokens"])       # text without empty blocks
         stash["raw"], stash["ids"] = raw, [trim_padding(r, pad) for r in kept]
+        stash["ended"] = [any(tok in stops for tok in r) for r in rows]          # ended on a stop token
         return replies, truncated
     return generate

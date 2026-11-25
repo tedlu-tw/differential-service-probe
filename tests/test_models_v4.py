@@ -230,6 +230,7 @@ def test_raw_replies_stay_aligned_with_replies():
     assert replies == ["w20 w21", "w22", "w23 w24 w25 w26 w27", "w28"]
     assert stash["raw"][1].startswith("<|channel>thought\n<channel|>") and "w22" in stash["raw"][1]   # raw keeps the block
     assert stash["ids"][1] == [22, 1] and truncated == [False, False, True, False]
+    assert stash["ended"] == [True, True, False, True]                        # the third was cut off
     for raw, reply in zip(stash["raw"], replies):
         assert reply.split()[0] in raw                                                         # same reply, same place
 
