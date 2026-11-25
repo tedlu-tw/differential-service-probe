@@ -12,6 +12,7 @@ import platform
 from importlib import metadata
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]          # the repo root, as stimuli_v3.ROOT
 PACKAGES = ["torch", "transformers", "tokenizers", "huggingface_hub", "safetensors", "accelerate",
             "numpy", "pandas", "pyyaml"]
 
@@ -58,14 +59,18 @@ def check_against_lock(lock, installed, packages=PACKAGES):
         raise RuntimeError(f"package versions differ from the lock file (locked, installed): {wrong}")
 
 
-def check_environment(env, installed, root="."):
-    """Before any model loads: the pins (torch, transformers), and, once the lock file exists, every
-    package in PACKAGES against it. Returns whether the lock was checked."""
+def check_environment(env, installed, root=None, require_lock=False):
+    """Before any model loads: the pins (torch, transformers), and every package in PACKAGES against
+    the lock file, found relative to the repo root, not the working directory. Returns whether the
+    lock was checked. require_lock (every model load): a missing lock file stops the run, since the
+    lock is frozen at the start of the first pod session, before any model loads."""
     check_versions({k: env[k] for k in ("torch", "transformers")}, installed)
-    lock = Path(root) / env["lock_file"]
+    lock = Path(root or ROOT) / env["lock_file"]
     if lock.exists():
         check_against_lock(parse_lock(lock.read_text()), installed)
         return True
+    if require_lock:
+        raise RuntimeError(f"lock file {lock} is missing; no model loads without it (protocol: Environment)")
     return False
 
 
@@ -78,11 +83,13 @@ def config_diff(loaded, defaults):
 
 def check_generation_config(loaded, defaults, recorded_suppress, allowed):
     """Allowlist: a loaded generation config may differ from the defaults only in token ids, the
-    recorded suppress_tokens, the settings every generate call passes explicitly, and metadata.
+    recorded suppress_tokens, the settings every generate call passes explicitly, metadata, and
+    fields that cannot change token probabilities (cache, memory and output settings).
     Any other non-default field (num_beams, penalty_alpha, min_p, ...) stops the run.
     Returns the full difference, for the run log."""
     diff = config_diff(loaded, defaults)
-    ok = set(allowed["token_ids"]) | set(allowed["explicit"]) | set(allowed["metadata"]) | {"suppress_tokens"}
+    ok = (set(allowed["token_ids"]) | set(allowed["explicit"]) | set(allowed["metadata"])
+          | set(allowed["no_effect"]) | {"suppress_tokens"})
     other = {k: v for k, v in diff.items() if k not in ok}
     if other:
         raise RuntimeError(f"generation config fields not on the allowlist: {other}")
@@ -216,14 +223,15 @@ def load_tokenizer_v4(spec):
     return tokenizer
 
 
-def load_model_v4(spec, cfg, root="."):
+def load_model_v4(spec, cfg, root=None):
     """Load one model at its fixed revision and class, as v3's load_model otherwise does it:
     left padding, the end-of-sequence token as pad if there is none, bf16, cuda, eval mode.
-    Refuses to load on a package mismatch or a generation config field off the allowlist."""
+    Refuses to load without the lock file, on a package mismatch, or on a generation config field
+    off the allowlist. The environment is checked before torch is imported."""
+    installed = package_versions()
+    lock_checked = check_environment(cfg["environment"], installed, root, require_lock=True)
     import torch
     import transformers
-    installed = package_versions()
-    check_environment(cfg["environment"], installed, root)
     rev = spec["revision"]
     tokenizer = load_tokenizer_v4(spec)
     model_class = getattr(transformers, spec["auto_class"])
@@ -232,7 +240,7 @@ def load_model_v4(spec, cfg, root="."):
     diff = check_generation_config(model.generation_config.to_dict(), transformers.GenerationConfig().to_dict(),
                                    spec["suppress_tokens"], cfg["generation"]["allowed_fields"])
     return model, tokenizer, {"model": spec["id"], "revision": rev, "precision": str(model.dtype),
-                              "packages": installed, "generation_config_diff": diff}
+                              "packages": installed, "lock_checked": lock_checked, "generation_config_diff": diff}
 
 
 def render_parts(tokenizer, spec):

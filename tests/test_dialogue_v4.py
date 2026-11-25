@@ -1,5 +1,6 @@
 """src/ds/dialogue_v4.py: the Arm 1 and Arm 2 loop, and Arm 3 through v3's run_dialogues."""
 import json
+import os
 import random
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 
 from ds import load_config
 from ds.dialogue import run_dialogues
-from ds.dialogue_v4 import KEY, dialogue_key, log_failures, run_arm3, run_dialogues_v4, with_raw
+from ds.dialogue_v4 import KEY, dialogue_key, run_arm3, run_dialogues_v4, with_raw
 from ds.items_v4 import attempt_text, make_bank
 from ds.mock import mock_reply_fn, v3_setting
 from ds.models_v4 import GenerationFailure
@@ -17,6 +18,7 @@ from ds.stimuli_v4 import build_cells_v4
 ROOT = Path(__file__).parents[1]
 CFG = load_config(ROOT / "configs" / "experiment_v4.yaml")
 V3 = load_config(ROOT / "configs" / "experiment_v3.yaml")
+NOLOG = (os.devnull, {"model": "fake", "run": "arm1"})        # failures are tested separately
 MAX_TURNS, BATCH = CFG["arms"]["arm1"]["max_turns"], CFG["generation"]["batch_size"]
 
 
@@ -58,7 +60,7 @@ def test_followups_come_only_from_the_cell(setup, bank):
     marked = [{**c, "followups": [f"{c['condition']}-{t}" for t in range(2, 6)]} if c["condition"] != "after_attempt"
               else c for c in cells]
     fake = Planned(answers, lambda key: None)                   # never gives in: every turn is asked
-    run_dialogues_v4(marked, 0, fake, answers, MAX_TURNS, BATCH)
+    run_dialogues_v4(marked, 0, fake, answers, MAX_TURNS, BATCH, failure_log=NOLOG)
     for s in fake.seen:
         later_users = [m["content"] for m in s["messages"] if m["role"] == "user"][-(s["turn"] - 1):] if s["turn"] > 1 else []
         cell = next(c for c in marked if all(c[k] == s[k] for k in KEY if k != "seed"))
@@ -74,7 +76,7 @@ def test_followups_come_only_from_the_cell(setup, bank):
 
 def test_stop_rule_and_five_turn_limit(setup):
     cells, answers, _ = setup
-    rows = run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH)
+    rows = run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, failure_log=NOLOG)
     by_dialogue = {}
     for r in rows:
         by_dialogue.setdefault(dialogue_key(r), []).append(r)
@@ -88,15 +90,15 @@ def test_stop_rule_and_five_turn_limit(setup):
 
 def test_resume_is_per_arm_and_reproduces_a_full_run(setup):
     cells, answers, _ = setup
-    full = run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH)
+    full = run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, failure_log=NOLOG)
     part = [r for r in full if r["turn"] <= 2]
-    resumed = part + run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, done_rows=part)
+    resumed = part + run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, done_rows=part, failure_log=NOLOG)
     order = lambda rs: sorted(rs, key=lambda r: (dialogue_key(r), r["turn"]))
     assert order(resumed) == order(full)
     twin = {**cells[0], "arm": "arm2" if cells[0]["arm"] == "arm1" else "arm1"}   # same fields, other arm
     done_other_arm = [r for r in full if dialogue_key(r)[1:] == dialogue_key({**cells[0], "seed": 0})[1:]
                       and r["arm"] == cells[0]["arm"]]
-    new = run_dialogues_v4([twin], 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, done_rows=done_other_arm)
+    new = run_dialogues_v4([twin], 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, done_rows=done_other_arm, failure_log=NOLOG)
     assert new and new[0]["turn"] == 1 and new[0]["arm"] == twin["arm"]    # the other arm's rows are not its own
 
 
@@ -104,7 +106,7 @@ def test_raw_replies_aligned_through_batching_by_length(setup):
     cells, answers, _ = setup
     shuffled = cells[:]
     random.Random(3).shuffle(shuffled)
-    rows = run_dialogues_v4(shuffled, 1, Planned(answers, plan_by_hash), answers, MAX_TURNS, 3)
+    rows = run_dialogues_v4(shuffled, 1, Planned(answers, plan_by_hash), answers, MAX_TURNS, 3, failure_log=NOLOG)
     for r in rows:
         assert r["raw_reply"] == f"RAW|{'|'.join(dialogue_key(r))}|{r['turn']}"
 
@@ -118,11 +120,28 @@ def test_failed_batch_logged_before_the_run_stops(setup, tmp_path):
             raise GenerationFailure("non-empty thinking block in a reply", [f"raw {i}" for i in range(len(batch))])
         return Planned(answers, lambda key: None)(batch)
     with pytest.raises(GenerationFailure):
-        run_dialogues_v4(cells, 0, log_failures(failing, path, {"model": "m", "run": "dry_run"}), answers, MAX_TURNS, BATCH)
+        run_dialogues_v4(cells, 0, failing, answers, MAX_TURNS, BATCH, failure_log=(path, {"model": "m", "run": "dry_run"}))
     lines = [json.loads(line) for line in path.read_text().splitlines()]
     assert lines and {r["turn"] for r in lines} == {2} and all(r["model"] == "m" and r["run"] == "dry_run" for r in lines)
     assert [r["raw_reply"] for r in lines] == [f"raw {i}" for i in range(len(lines))]
     assert all({"arm", "question_id", "prompt", "condition", "phrasing", "seed", "error"} <= set(r) for r in lines)
+
+
+def test_failure_inside_arm3_is_logged_with_the_arm(tmp_path):
+    arm3 = CFG["arm3"]
+    questions = make_questions_v3(arm3)
+    cells = build_cells_v3(arm3, questions[::50])
+    answers = {q["id"]: q["answer"] for q in questions}
+    path = tmp_path / "failures.jsonl"
+
+    def failing(batch):
+        raise GenerationFailure("a thinking block is opened and never closed", [f"raw {i}" for i in range(len(batch))])
+    with pytest.raises(GenerationFailure):
+        run_arm3(cells, 2, failing, answers, arm3, {}, failure_log=(path, {"model": "Qwen/Qwen3-8B", "run": "arm3"}))
+    lines = [json.loads(line) for line in path.read_text().splitlines()]
+    assert lines and all(r["arm"] == "arm3" and r["model"] == "Qwen/Qwen3-8B" and r["run"] == "arm3" and r["seed"] == 2
+                         for r in lines)
+    assert all({"question_id", "prompt", "condition", "phrasing", "turn", "raw_reply", "error"} <= set(r) for r in lines)
 
 
 def test_with_raw_takes_the_stash_of_the_same_batch():
@@ -152,7 +171,7 @@ def test_arm3_rows_equal_v3_code_path_on_the_mock():
         out = mock(batch)
         stash["raw"] = [reply for reply, _ in out]
         return out
-    v4_rows = run_arm3(cells, 0, stashing, answers, arm3, stash, extra=extra)
+    v4_rows = run_arm3(cells, 0, stashing, answers, arm3, stash, extra=extra, failure_log=NOLOG)
     assert [{k: v for k, v in r.items() if k not in ("raw_reply", "arm")} for r in v4_rows] == v3_rows
     assert all(r["arm"] == "arm3" and r["raw_reply"] == r["reply"] for r in v4_rows)
     assert len(v3_rows) > len(cells)                              # some dialogues went past turn 1

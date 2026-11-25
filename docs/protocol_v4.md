@@ -160,6 +160,10 @@ What the templates of the four new models do, checked at the revisions above:
     - metadata (`transformers_version`, `_from_model_config`).
 
   Any other non-default field stops the load. This includes fields that change decoding, such as `num_beams`, `num_beam_groups`, `penalty_alpha`, `diversity_penalty` or `min_p`. The difference from the defaults is written to the run log.
+- **Fields that appear only when the full model loads:** a model class can add fields to the generation config that are not in `generation_config.json`.
+    - **Allowed:** fields that cannot change token probabilities: cache and memory settings such as `cache_implementation` and `use_cache`, and output flags (`output_attentions`, `output_scores`, `output_logits`, `return_dict_in_generate`). Each is logged in the run log, and each one seen is recorded as a pre-freeze row in `docs/deviations_v4.md`.
+    - **Not allowed:** `output_hidden_states`, because hidden states during generation are not allowed in v4 (see the probe section). It stops the load.
+    - **Any field that can change decoding stops the run.**
 - **Suppressed tokens:** a `suppress_tokens` list that only blocks non-text tokens is kept and recorded. Gemma 4 ships tokens 258882 and 258883, the image and audio end markers. Loading fails if a shipped list differs from the recorded one.
 - **Logging:** the effective settings are logged per model and run.
 - **Settings per run:**
@@ -359,7 +363,7 @@ In this order, all logged in `docs/deviations_v4.md`.
 - the number rules,
 - the unmatched-family balance.
 
-**Pod checkpoint, before the dry run.** The full test suite runs on the pod, in the v4 environment, with Hugging Face access to Llama, so that none of the pod-only tests is skipped. These are the Llama template tests, the stop sets, and v3 rendering byte for byte. The result (passed, failed and skipped counts, and any skip reason) is recorded in the run log. Any failure or skip of a pod-only test stops the work before the dry run.
+**Pod checkpoint, before the dry run.** The full test suite runs on the pod, in the v4 environment, with Hugging Face access to Llama and with `REQUIRE_ALL=1`, so that none of the pod-only tests is skipped. These are the Llama template tests, the stop sets, and v3 rendering byte for byte. Under `REQUIRE_ALL=1`, a model-dependent test that cannot run (a missing package, or a tokenizer that does not load) fails instead of skipping. Only the reproduction checks on the private v2 and v3 replies skip on the pod; they run on the author's machine. The result (passed, failed and skipped counts, and any skip reason) is recorded in the run log. Any failure or skip of a pod-only test stops the work before the dry run.
 
 **b) Dry run, per model.** 5 questions × every cell of the three arms × 1 seed. Check:
 - loading, versions and revision,
@@ -377,7 +381,7 @@ Apply the replacement rule here if needed. No contrasts are computed.
     - **Prompt A `demand` cells:** `gave_by_turn2`, the turn distribution and the truncation rate are reported.
     - **Every other pilot cell** (prompt A `after_attempt`, and all prompt B cells): truncation only. Neither the RQ2 contrast nor the prompt B − A contrast is seen before the freeze. These replies are used only for truncation and the step d sample.
     - **Set here:** `max_new_tokens`, the RQ1 and RQ2 floor or ceiling rules, and each model's sensitivity base.
-- **Accuracy with working:** on all 100 v4 current questions, per model. It uses v3's solve prompt (the `plain` system prompt, the question, and "Solve the problem. Show your working, then give the final answer alone on the last line.") and v3's last-line parser. It is reported per model and family, with the unparsed rate. Descriptive only: no question or model is excluded because of it.
+- **Accuracy with working:** on all 100 v4 current questions, per model, run after the neutral pilot has fixed the model's `max_new_tokens`, so it uses the same value as Arms 1 and 2. It uses v3's solve prompt (the `plain` system prompt, the question, and "Solve the problem. Show your working, then give the final answer alone on the last line.") and v3's last-line parser. It is reported per model and family, with the unparsed rate and the truncation rate next to the accuracy. Descriptive only: no question or model is excluded because of it.
 - **v3 pilot, for the four new models only:** v3's step a pilot exactly: v3's pedagogical neutral cells, the same 100 questions, 1 seed, 512 new tokens, and accuracy with working on those 100 questions, as in v3. Its neutral `gave_by_turn2` sets the model's Arm 3 key measure under v3's floor or ceiling rule. The three v3 models keep the key measures v3 fixed.
 
 **d) Judge validation.** 150 replies.

@@ -64,11 +64,14 @@ def reply_rows(batch, outputs, answers, extra):
             for s, (reply, truncated, raw) in zip(batch, outputs)]
 
 
-def run_dialogues_v4(cells, seed, reply_fn, answers, max_turns, batch_size, done_rows=(), on_rows=None,
-                     extra=None, progress=None):
-    """Run every Arm 1 and Arm 2 dialogue of one seed to its end and return the new rows.
-    done_rows: rows already logged for this model; finished turns are not redone. Otherwise as v3's run_dialogues."""
+def run_dialogues_v4(cells, seed, reply_fn, answers, max_turns, batch_size, *, failure_log, done_rows=(),
+                     on_rows=None, extra=None, progress=None):
+    """Run every dialogue of one seed to its end and return the new rows: Arms 1 and 2, the pilot, and
+    the one-turn solve and check runs. done_rows: rows already logged for this model; finished turns
+    are not redone. failure_log = (path, {"model", "run", ...}) is required: every batch goes through
+    log_failures. Otherwise as v3's run_dialogues."""
     check_cells(cells, max_turns)
+    reply_fn = log_failures(reply_fn, *failure_log)
     rows, new = list(done_rows), []
     while True:
         states = pending_states(cells, seed, group_replies(rows), answers, max_turns)
@@ -132,9 +135,14 @@ def with_raw(reply_fn, stash):
     return fn
 
 
-def run_arm3(cells, seed, reply_fn, answers, arm3_cfg, stash, done_rows=(), on_rows=None, extra=None, progress=None):
-    """Arm 3 through v3's run_dialogues, unchanged. on_rows adds each row's raw reply (from the batch
-    just generated) and the arm, then passes the rows on."""
+def run_arm3(cells, seed, reply_fn, answers, arm3_cfg, stash, *, failure_log, done_rows=(), on_rows=None,
+             extra=None, progress=None):
+    """Arm 3 (and v3's pilot and solve cells) through v3's run_dialogues, unchanged. The reply_fn goes
+    through log_failures; v3's states have no arm, so the arm is added to the failure record. on_rows
+    adds each row's raw reply (from the batch just generated) and the arm, then passes the rows on."""
+    path, meta = failure_log
+    reply_fn = log_failures(reply_fn, path, {"arm": "arm3", **meta})
+
     def add_raw(rows):
         for row, raw in zip(rows, take_raw(stash, len(rows))):
             row["raw_reply"], row["arm"] = raw, "arm3"

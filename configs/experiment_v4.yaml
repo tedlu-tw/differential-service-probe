@@ -208,6 +208,12 @@ generation:                  # Arms 1 and 2; Arm 3 uses arm3.generation
         # max_length is overridden by the explicit max_new_tokens.
         explicit: [do_sample, temperature, top_p, top_k, repetition_penalty, max_new_tokens, max_length]
         metadata: [transformers_version, _from_model_config]
+        # Fields that cannot change token probabilities and may appear only when the full model loads:
+        # cache and memory settings and output flags. Allowed, logged in run_info_jsonl, and each one seen
+        # is recorded as a pre-freeze row in docs/deviations_v4.md. output_hidden_states is not here:
+        # the protocol forbids hidden states during generation, so it stops the load.
+        no_effect: [cache_implementation, use_cache, output_attentions, output_scores, output_logits,
+                    return_dict_in_generate]
 
 environment:                 # pinned as in v3; checked at load and written to run_info_jsonl
     torch: "2.15.0"
