@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 from ds.dialogue import by_length, is_finished, messages_for_turn, run_dialogues
-from ds.models_v4 import GenerationFailure
+from ds.models_v4 import RUN_SETTINGS, GenerationFailure
 from ds.score import gives_answer
 
 KEY = ["arm", "question_id", "prompt", "condition", "phrasing", "seed"]
@@ -71,6 +71,7 @@ def run_dialogues_v4(cells, seed, reply_fn, answers, max_turns, batch_size, *, f
     are not redone. failure_log = (path, {"model", "run", ...}) is required: every batch goes through
     log_failures. Otherwise as v3's run_dialogues."""
     check_cells(cells, max_turns)
+    extra = {**(extra or {}), "run": run_name(failure_log)}       # every row says which run wrote it
     reply_fn = log_failures(reply_fn, *failure_log)
     rows, new = list(done_rows), []
     while True:
@@ -82,7 +83,7 @@ def run_dialogues_v4(cells, seed, reply_fn, answers, max_turns, batch_size, *, f
         bar = progress(turn, len(todo)) if progress else None
         for i in range(0, len(todo), batch_size):
             batch = todo[i:i + batch_size]
-            batch_rows = reply_rows(batch, reply_fn(batch), answers, extra or {})
+            batch_rows = reply_rows(batch, reply_fn(batch), answers, extra)
             rows += batch_rows
             new += batch_rows
             if on_rows:
@@ -91,6 +92,19 @@ def run_dialogues_v4(cells, seed, reply_fn, answers, max_turns, batch_size, *, f
                 bar.update(len(batch))
         if bar:
             bar.close()
+
+
+# ---------- run names ----------
+
+RUNS = set(RUN_SETTINGS) | {"dry_run"}
+
+
+def run_name(failure_log):
+    """The run named in failure_log's details, which every loop requires, so no row lacks it."""
+    run = failure_log[1].get("run")
+    if run not in RUNS:
+        raise ValueError(f"failure_log names run {run!r}; expected one of {sorted(RUNS)}")
+    return run
 
 
 # ---------- failures ----------
@@ -135,17 +149,23 @@ def with_raw(reply_fn, stash):
     return fn
 
 
+ARM3_RUNS = ("arm3", "dry_run")     # runs whose v3-format cells are Arm 3 cells; v3_pilot and v3_solve are not
+
+
 def run_arm3(cells, seed, reply_fn, answers, arm3_cfg, stash, *, failure_log, done_rows=(), on_rows=None,
              extra=None, progress=None):
-    """Arm 3 (and v3's pilot and solve cells) through v3's run_dialogues, unchanged. The reply_fn goes
-    through log_failures; v3's states have no arm, so the arm is added to the failure record. on_rows
-    adds each row's raw reply (from the batch just generated) and the arm, then passes the rows on."""
+    """Arm 3, and v3's pilot and solve cells for the new models, through v3's run_dialogues, unchanged.
+    The reply_fn goes through log_failures. on_rows adds each row's raw reply (from the batch just
+    generated), the run, and the arm: "arm3" only for Arm 3 cells (run arm3, or the dry run), so that
+    v3_pilot and v3_solve rows never read as Arm 3. The analysis selects Arm 3 by run."""
     path, meta = failure_log
-    reply_fn = log_failures(reply_fn, path, {"arm": "arm3", **meta})
+    run = run_name(failure_log)
+    arm = "arm3" if run in ARM3_RUNS else None
+    reply_fn = log_failures(reply_fn, path, {**({"arm": arm} if arm else {}), **meta})
 
     def add_raw(rows):
         for row, raw in zip(rows, take_raw(stash, len(rows))):
-            row["raw_reply"], row["arm"] = raw, "arm3"
+            row["raw_reply"], row["run"], row["arm"] = raw, run, arm
         if on_rows:
             on_rows(rows)
     return run_dialogues(cells, seed, reply_fn, answers, arm3_cfg, done_rows=done_rows, on_rows=add_raw,

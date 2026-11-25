@@ -208,12 +208,18 @@ generation:                  # Arms 1 and 2; Arm 3 uses arm3.generation
         # max_length is overridden by the explicit max_new_tokens.
         explicit: [do_sample, temperature, top_p, top_k, repetition_penalty, max_new_tokens, max_length]
         metadata: [transformers_version, _from_model_config]
-        # Fields that cannot change token probabilities and may appear only when the full model loads:
-        # cache and memory settings and output flags. Allowed, logged in run_info_jsonl, and each one seen
-        # is recorded as a pre-freeze row in docs/deviations_v4.md. output_hidden_states is not here:
-        # the protocol forbids hidden states during generation, so it stops the load.
-        no_effect: [cache_implementation, use_cache, output_attentions, output_scores, output_logits,
-                    return_dict_in_generate]
+        # Fields that may appear only when the full model loads, and the non-default VALUES allowed for
+        # each: values that cannot change token probabilities. Any other value stops the load (a quantized
+        # cache changes the probabilities; static, hybrid or sliding_window caches can change the numerics
+        # or the positions attended). Allowed values are logged in run_info_jsonl, and each one seen is
+        # recorded as a pre-freeze row in docs/deviations_v4.md. Not listed, so any non-default value stops
+        # the load: output_attentions (it can switch the attention kernel), return_dict_in_generate
+        # (generate_batch slices the output as a tensor), output_hidden_states (not allowed in v4).
+        no_effect:
+            cache_implementation: [dynamic, offloaded]
+            use_cache: [false]
+            output_scores: [true]
+            output_logits: [true]
 
 environment:                 # pinned as in v3; checked at load and written to run_info_jsonl
     torch: "2.15.0"
@@ -255,6 +261,11 @@ validate:                    # step d
             exclude: {prompt: B, pressure: after_attempt}   # either one excludes a reply
     remediation_source: {run: dry_run, arm: arm1,
                          conditions: [history_matched_struggle, history_unmatched_struggle]}
+    min_arm1_turn1_from_dry_run: 50      # of the 150: RQ1 is measured on Arm 1 turn-1 replies
+    later_turns:                         # gives_answer only; the exclusions in sources still apply
+        turns: [2, 3, 4, 5]
+        min_per_value: 10                # each gives_answer value, where the replies have that many
+    # Turn-1 replies are labelled for every measure that applies; later-turn replies for gives_answer only.
     measures: [guidance_level, remediation, diagnostic_question, gives_answer]
 
 check:                       # step e
@@ -311,6 +322,11 @@ analysis:
                 history_unmatched_success, history_unmatched_struggle]
         rq2_interaction: {measure: gave_by_turn2}   # prompt x pressure
         diagnostic_question: all   # every contrast above (M, U, I, vs neutral, RQ2 primary and secondary) on it
+        # U, and the relevance check, by current family x unmatched family (12 pairs). two_step (left to
+        # right) and linear_equation (dividing before subtracting) both have order-of-operations errors.
+        u_by_family_pair: {measure: guidance_level, a: history_unmatched_struggle, b: history_unmatched_success,
+                           by: [current_family, unmatched_family]}
+        relevance_by_family_pair: {condition: history_unmatched_struggle, by: [current_family, unmatched_family]}
     arm3_replication:        # v3 models only; protocol: Analysis, Arm 3
         models: v3
         results: [primary, control]

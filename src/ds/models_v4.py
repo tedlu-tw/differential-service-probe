@@ -81,18 +81,24 @@ def config_diff(loaded, defaults):
     return {k: v for k, v in loaded.items() if k not in defaults or defaults[k] != v}
 
 
+def allowed_value(value, allowed):
+    """Exact match, type included, so that 0 never passes for False or 1 for True."""
+    return any(type(value) is type(a) and value == a for a in allowed)
+
+
 def check_generation_config(loaded, defaults, recorded_suppress, allowed):
     """Allowlist: a loaded generation config may differ from the defaults only in token ids, the
-    recorded suppress_tokens, the settings every generate call passes explicitly, metadata, and
-    fields that cannot change token probabilities (cache, memory and output settings).
+    recorded suppress_tokens, the settings every generate call passes explicitly, metadata, and the
+    listed values of a few load-time fields that cannot change token probabilities (no_effect).
     Any other non-default field (num_beams, penalty_alpha, min_p, ...) stops the run.
     Returns the full difference, for the run log."""
     diff = config_diff(loaded, defaults)
-    ok = (set(allowed["token_ids"]) | set(allowed["explicit"]) | set(allowed["metadata"])
-          | set(allowed["no_effect"]) | {"suppress_tokens"})
-    other = {k: v for k, v in diff.items() if k not in ok}
+    ok = set(allowed["token_ids"]) | set(allowed["explicit"]) | set(allowed["metadata"]) | {"suppress_tokens"}
+    no_effect = allowed["no_effect"]              # field -> the non-default values allowed
+    other = {k: v for k, v in diff.items()
+             if k not in ok and not (k in no_effect and allowed_value(v, no_effect[k]))}
     if other:
-        raise RuntimeError(f"generation config fields not on the allowlist: {other}")
+        raise RuntimeError(f"generation config fields or values not on the allowlist: {other}")
     shipped = sorted(diff.get("suppress_tokens") or [])
     if shipped != sorted(recorded_suppress):
         raise RuntimeError(f"suppress_tokens shipped {shipped}, recorded {sorted(recorded_suppress)}")

@@ -12,13 +12,15 @@ from ds.dialogue_v4 import KEY, dialogue_key, run_arm3, run_dialogues_v4, with_r
 from ds.items_v4 import attempt_text, make_bank
 from ds.mock import mock_reply_fn, v3_setting
 from ds.models_v4 import GenerationFailure
-from ds.stimuli_v3 import build_cells_v3, make_questions_v3
+from ds.generate_v3 import single_turn
+from ds.stimuli_v3 import build_cells_v3, build_solve_cells_v3, make_questions_v3
 from ds.stimuli_v4 import build_cells_v4
 
 ROOT = Path(__file__).parents[1]
 CFG = load_config(ROOT / "configs" / "experiment_v4.yaml")
 V3 = load_config(ROOT / "configs" / "experiment_v3.yaml")
 NOLOG = (os.devnull, {"model": "fake", "run": "arm1"})        # failures are tested separately
+ARM3LOG = (os.devnull, {"model": "fake", "run": "arm3"})
 MAX_TURNS, BATCH = CFG["arms"]["arm1"]["max_turns"], CFG["generation"]["batch_size"]
 
 
@@ -144,6 +146,30 @@ def test_failure_inside_arm3_is_logged_with_the_arm(tmp_path):
     assert all({"question_id", "prompt", "condition", "phrasing", "turn", "raw_reply", "error"} <= set(r) for r in lines)
 
 
+def test_rows_labelled_by_run(setup):
+    """Every row names its run; v3_solve rows (through run_arm3) are not labelled Arm 3."""
+    cells, answers, _ = setup
+    rows = run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH,
+                            failure_log=(os.devnull, {"model": "fake", "run": "pilot"}))
+    assert {r["run"] for r in rows} == {"pilot"} and {r["arm"] for r in rows} == {"arm1", "arm2"}
+    arm3 = CFG["arm3"]
+    questions = make_questions_v3(arm3)
+    solve = build_solve_cells_v3(single_turn(arm3), questions[:6])
+    stash = {}
+
+    def solver(batch):
+        stash["raw"] = ["Working. 42" for _ in batch]
+        return [("Working. 42", False) for _ in batch]
+    rows = run_arm3(solve, 0, solver, {q["id"]: q["answer"] for q in questions}, single_turn(arm3), stash,
+                    failure_log=(os.devnull, {"model": "fake", "run": "v3_solve"}))
+    assert len(rows) == 6 and all(r["run"] == "v3_solve" and r["arm"] != "arm3" for r in rows)
+    for bad in ({"model": "fake"}, {"model": "fake", "run": "Arm3"}, {"model": "fake", "run": "full"}):
+        with pytest.raises(ValueError, match="run"):
+            run_dialogues_v4(cells, 0, Planned(answers, plan_by_hash), answers, MAX_TURNS, BATCH, failure_log=(os.devnull, bad))
+        with pytest.raises(ValueError, match="run"):
+            run_arm3(solve, 0, solver, {}, single_turn(arm3), stash, failure_log=(os.devnull, bad))
+
+
 def test_with_raw_takes_the_stash_of_the_same_batch():
     stash = {}
 
@@ -171,7 +197,7 @@ def test_arm3_rows_equal_v3_code_path_on_the_mock():
         out = mock(batch)
         stash["raw"] = [reply for reply, _ in out]
         return out
-    v4_rows = run_arm3(cells, 0, stashing, answers, arm3, stash, extra=extra, failure_log=NOLOG)
-    assert [{k: v for k, v in r.items() if k not in ("raw_reply", "arm")} for r in v4_rows] == v3_rows
-    assert all(r["arm"] == "arm3" and r["raw_reply"] == r["reply"] for r in v4_rows)
+    v4_rows = run_arm3(cells, 0, stashing, answers, arm3, stash, extra=extra, failure_log=ARM3LOG)
+    assert [{k: v for k, v in r.items() if k not in ("raw_reply", "arm", "run")} for r in v4_rows] == v3_rows
+    assert all(r["arm"] == "arm3" and r["run"] == "arm3" and r["raw_reply"] == r["reply"] for r in v4_rows)
     assert len(v3_rows) > len(cells)                              # some dialogues went past turn 1

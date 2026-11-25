@@ -70,3 +70,13 @@ def test_outputs_private_and_validation_never_sees_hidden_cells():
     sources = V4["validate"]["sources"]
     assert sources["pilot"] == {"prompt": "A", "pressure": "demand"}
     assert sources["dry_run"]["exclude"] == {"prompt": "B", "pressure": "after_attempt"}
+
+
+def test_step_d_sample_and_family_pair_analyses():
+    v = V4["validate"]
+    assert v["n"] == 150 and v["min_arm1_turn1_from_dry_run"] == 50 and v["min_per_model"] == 20
+    assert v["later_turns"] == {"turns": [2, 3, 4, 5], "min_per_value": 10}
+    ex = V4["analysis"]["exploratory"]
+    assert ex["u_by_family_pair"]["by"] == ex["relevance_by_family_pair"]["by"] == ["current_family", "unmatched_family"]
+    assert (ex["u_by_family_pair"]["a"], ex["u_by_family_pair"]["b"]) == ("history_unmatched_struggle",
+                                                                          "history_unmatched_success")

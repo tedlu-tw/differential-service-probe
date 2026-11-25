@@ -161,9 +161,22 @@ What the templates of the four new models do, checked at the revisions above:
 
   Any other non-default field stops the load. This includes fields that change decoding, such as `num_beams`, `num_beam_groups`, `penalty_alpha`, `diversity_penalty` or `min_p`. The difference from the defaults is written to the run log.
 - **Fields that appear only when the full model loads:** a model class can add fields to the generation config that are not in `generation_config.json`.
-    - **Allowed:** fields that cannot change token probabilities: cache and memory settings such as `cache_implementation` and `use_cache`, and output flags (`output_attentions`, `output_scores`, `output_logits`, `return_dict_in_generate`). Each is logged in the run log, and each one seen is recorded as a pre-freeze row in `docs/deviations_v4.md`.
-    - **Not allowed:** `output_hidden_states`, because hidden states during generation are not allowed in v4 (see the probe section). It stops the load.
-    - **Any field that can change decoding stops the run.**
+    - **Allowed values only:** the field's value decides, not just its name. These non-default values are allowed:
+
+      | Field | Values allowed |
+      |---|---|
+      | `cache_implementation` | `dynamic`, `offloaded` |
+      | `use_cache` | `false` |
+      | `output_scores`, `output_logits` | `true` |
+
+      Each allowed value seen is logged in the run log and recorded as a pre-freeze row in `docs/deviations_v4.md`.
+    - **Any other value stops the load.** For example:
+        - a quantized cache changes the probabilities,
+        - `static`, `hybrid` or `sliding_window` caches can change the numerics or which positions are attended,
+        - `output_attentions` can switch the attention kernel,
+        - `return_dict_in_generate` would break v2's `generate_batch`, which slices the output as a tensor,
+        - `output_hidden_states` is not allowed in v4 (see the probe section).
+    - **On the pod:** if Gemma 4 or another model adds a value off this list, the load stops and the author decides before the freeze.
 - **Suppressed tokens:** a `suppress_tokens` list that only blocks non-text tokens is kept and recorded. Gemma 4 ships tokens 258882 and 258883, the image and audio end markers. Loading fails if a shipped list differs from the recorded one.
 - **Logging:** the effective settings are logged per model and run.
 - **Settings per run:**
@@ -313,6 +326,7 @@ Every contrast is computed within one model and one prompt.
 - **Key secondary:** the `remediation` rate, `history_matched_struggle` − `history_unmatched_struggle`.
 - **Simple effects:** M and U are reported, and used for the pre-specified reading.
 - **Exploratory, reported:** each Arm 1 history condition minus `history_neutral`, on `guidance_level` at turn 1.
+- **Exploratory, reported: U by family pair.** U (struggle − success, unmatched) is broken down by current family × unmatched family (12 pairs). Some unmatched pairs share a kind of error: `two_step`'s misconception (working left to right) and `linear_equation`'s (dividing before subtracting) are both order-of-operations errors, so a tutor could reasonably treat them as related. Each pair has few questions (about 16 to 17 question-phrasings per family pair), so these are descriptive only.
 
 **`diagnostic_question`:** every contrast on it, in any arm, is exploratory.
 
@@ -389,8 +403,10 @@ Apply the replacement rule here if needed. No contrasts are computed.
     - drawn only from the neutral pilot's prompt A `demand` cells and from the dry run. Every `after_attempt` reply and every prompt B reply is excluded, from the pilot and from the dry run alike, so they stay unseen before the freeze,
     - stratified by the judge's output and by model (at least 20 per model),
     - each `guidance_level` value at least 10 times wherever the replies have that many,
-    - the `remediation` items drawn from the dry run's Arm 1 struggle cells.
-- **Sheet:** the problem and the reply (plus the earlier exchanges for `remediation`) only.
+    - at least 50 of the 150 are Arm 1 turn-1 replies from the dry run, since RQ1 is measured on those,
+    - the `remediation` items drawn from the dry run's Arm 1 struggle cells,
+    - **later turns for `gives_answer`:** the sample includes replies from turns 2 to 5, with each `gives_answer` value at least 10 times among them, wherever the replies have that many. The exclusions above still apply. These replies are labelled for `gives_answer` only; turn-1 replies are labelled for every measure that applies to them.
+- **Sheet:** the problem and the reply (plus the earlier exchanges for `remediation`, and for a later-turn reply) only.
 - **Labels:**
     - The author labels the sheet blind. The labeller is recorded, and any non-human labels are reported separately.
     - `gives_answer` is labelled on the same sheet, because it stops every dialogue and the four new models were not in v3's scorer validation.
@@ -405,6 +421,7 @@ Apply the replacement rule here if needed. No contrasts are computed.
 **e) Manipulation checks, per model.**
 - **Correctness:** after the Arm 1 history turns, v3's check question with v3's parser. Expected: success yes, yes; struggle no, no.
 - **Relevance:** after the struggle histories and the current problem, a new question: "Is the mistake in my earlier answers relevant to this problem? Answer yes or no." Expected: matched yes, unmatched no.
+    - **By family pair (exploratory):** the unmatched answers are also reported by current family × unmatched family, as for U, since the order-of-operations pairs (`two_step` and `linear_equation`) may reasonably be read as relevant.
     - **Parser:** the first yes or no word in the first sentence, otherwise unparsed. It is tested on the mock.
 
 **f) Mock sensitivity.**

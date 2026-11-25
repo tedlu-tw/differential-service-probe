@@ -69,6 +69,19 @@ def test_allowlist_refuses_any_other_field(field, value):
         m.check_generation_config({**DEFAULTS, field: value}, DEFAULTS, [], ALLOWED)
 
 
+def test_load_time_fields_allowed_only_with_listed_values():
+    """no_effect depends on the value: a dynamic cache passes and is logged; a quantized cache, attention
+    weights or a dict output stops the load."""
+    passing = {**DEFAULTS, "cache_implementation": "dynamic", "use_cache": False, "output_scores": True}
+    diff = m.check_generation_config(passing, DEFAULTS, [], ALLOWED)
+    assert diff == {"cache_implementation": "dynamic", "use_cache": False, "output_scores": True}
+    for field, value in (("cache_implementation", "quantized"), ("cache_implementation", "static"),
+                         ("cache_implementation", "hybrid"), ("output_attentions", True),
+                         ("return_dict_in_generate", True), ("output_hidden_states", True), ("use_cache", 0)):
+        with pytest.raises(RuntimeError, match="allowlist"):
+            m.check_generation_config({**DEFAULTS, field: value}, DEFAULTS, [], ALLOWED)
+
+
 def test_suppress_tokens_must_match_record():
     for shipped in ([258882], [258882, 258883, 5]):
         with pytest.raises(RuntimeError, match="suppress_tokens"):
