@@ -6,6 +6,7 @@ numpy>=1.24
 pandas>=2.0
 pyyaml>=6.0
 pytest>=7.0
+tqdm>=4.0                # progress bars; otherwise it arrives only through transformers
 # Only the v4 generation code imports these. Pinned to the versions v3 used (docs/deviations_v3.md).
 # If a model needs a newer version, upgrade only what that model needs, for that model only, and
 # record it in docs/deviations_v4.md. Never rerun a v3 model under an upgraded environment.

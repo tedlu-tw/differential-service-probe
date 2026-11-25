@@ -8,6 +8,10 @@ Three layers:
 - anything that goes through v2's generate module (stop_ids, render): needs torch, so it runs on
   the pod.
 """
+import functools
+import importlib
+import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -103,6 +107,51 @@ def test_environment_check_uses_the_lock_once_it_exists(tmp_path):
         m.check_environment(env, {**installed, "tokenizers": "9.9"}, tmp_path)
     with pytest.raises(RuntimeError, match="pins"):
         m.check_environment(env, {**installed, "torch": "2.16.0"}, tmp_path)
+
+
+def test_missing_lock_stops_the_load(monkeypatch, tmp_path):
+    """No lock file in the repo root: load_model_v4 refuses before importing torch, even when the
+    pinned versions are installed."""
+    installed = m.package_versions() | {"torch": "2.15.0", "transformers": "5.22.2"}
+    with pytest.raises(RuntimeError, match="lock file .* is missing"):
+        m.check_environment(CFG["environment"], installed, tmp_path, require_lock=True)
+    monkeypatch.setattr(m, "package_versions", lambda packages=m.PACKAGES: installed)
+    fake_stack(monkeypatch, dict(DEFAULTS))                                  # would load fine otherwise
+    with pytest.raises(RuntimeError, match="lock file .* is missing"):
+        m.load_model_v4(SPECS["microsoft/phi-4"], CFG, tmp_path)
+    assert m.ROOT == Path(__file__).resolve().parents[1]                     # found from the repo root, not the cwd
+
+
+def fake_stack(monkeypatch, shipped):
+    """torch and transformers stand-ins, so load_model_v4 can run without a GPU."""
+    class Model:
+        dtype, generation_config = "torch.bfloat16", SimpleNamespace(to_dict=lambda: shipped)
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+    tok = SimpleNamespace(pad_token="<pad>", eos_token="<eos>")
+    auto = SimpleNamespace(from_pretrained=lambda *a, **k: Model())
+    fake_tf = SimpleNamespace(AutoTokenizer=SimpleNamespace(from_pretrained=lambda *a, **k: tok),
+                              AutoModelForCausalLM=auto,
+                              GenerationConfig=lambda: SimpleNamespace(to_dict=lambda: dict(DEFAULTS)))
+    monkeypatch.setitem(sys.modules, "transformers", fake_tf)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(bfloat16="bf16"))
+
+
+def test_load_records_lock_checked_and_the_config_difference(monkeypatch, tmp_path):
+    installed = {p: "1.0" for p in m.PACKAGES} | {"torch": "2.15.0", "transformers": "5.22.2"}
+    monkeypatch.setattr(m, "package_versions", lambda packages=m.PACKAGES: installed)
+    (tmp_path / CFG["environment"]["lock_file"]).write_text("\n".join(f"{p}=={v}" for p, v in installed.items()) + "\n")
+    fake_stack(monkeypatch, {**DEFAULTS, "eos_token_id": 100265, "use_cache": False})
+    _, _, info = m.load_model_v4(SPECS["microsoft/phi-4"], CFG, tmp_path)
+    assert info["lock_checked"] is True and info["revision"] == SPECS["microsoft/phi-4"]["revision"]
+    assert info["generation_config_diff"] == {"eos_token_id": 100265, "use_cache": False}   # no-effect field allowed, logged
+    fake_stack(monkeypatch, {**DEFAULTS, "output_hidden_states": True})
+    with pytest.raises(RuntimeError, match="allowlist"):
+        m.load_model_v4(SPECS["microsoft/phi-4"], CFG, tmp_path)
 
 
 def test_settings_per_run():
@@ -234,6 +283,17 @@ def test_model_specs_complete():
 
 
 # ---------- real tokenizers and templates (transformers; no torch) ----------
+# Model-dependent tests are parametrized over only the models they apply to, so nothing is skipped
+# for structural reasons. Where a package or a tokenizer is unavailable they skip, except under
+# REQUIRE_ALL=1 (set in the pod checkpoint), where they fail, so a broken revision or option
+# cannot pass as "skipped".
+
+REQUIRE_ALL = os.environ.get("REQUIRE_ALL") == "1"
+ALL = sorted(SPECS)
+FORCED = [i for i in ALL if SPECS[i]["forced_text"]]
+MARKED = [i for i in ALL if SPECS[i].get("marker_tokens")]
+MINISTRAL = [i for i in ALL if i.startswith("mistralai/")]
+V3_MODELS = [i for i in ALL if SPECS[i]["group"] == "v3"]
 
 SYSTEM = CFG["prompts"]["system"]["A"]
 QUESTION = "A cyclist rides at a steady 12 km per hour for 3 hours. How many km does the cyclist ride in total?"
@@ -245,6 +305,46 @@ DEFAULT_TEXT = ["You are Ministral", "knowledge base was last updated", "The cur
                 "function-calling AI assistant", "helpful assistant with access", "You are Granite"]
 
 
+def unavailable(reason):
+    (pytest.fail if REQUIRE_ALL else pytest.skip)(reason)
+
+
+def outcome_of(call):
+    """The exception a call raises, caught here so that a skip cannot end this test as 'skipped'."""
+    try:
+        call()
+    except BaseException as e:                    # pytest's skip and fail outcomes are BaseExceptions
+        return e
+    return None
+
+
+def test_require_all_turns_skips_into_failures(monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "REQUIRE_ALL", True)
+    assert isinstance(outcome_of(lambda: unavailable("tokenizer not here")), pytest.fail.Exception)
+    monkeypatch.setattr(sys.modules[__name__], "REQUIRE_ALL", False)
+    assert isinstance(outcome_of(lambda: unavailable("tokenizer not here")), pytest.skip.Exception)
+
+
+def need(module):
+    try:
+        return importlib.import_module(module)
+    except ImportError:
+        unavailable(f"{module} is not installed")
+
+
+@functools.lru_cache(maxsize=None)
+def cached_tokenizer(model_id):
+    return m.load_tokenizer_v4(SPECS[model_id])
+
+
+def tokenizer_for(model_id):
+    need("transformers")
+    try:
+        return SPECS[model_id], cached_tokenizer(model_id)
+    except Exception as e:                       # gated (Llama off the pod), offline, or a broken revision
+        unavailable(f"{model_id}: tokenizer not available here ({type(e).__name__}: {e})")
+
+
 def dialogue(turn, history=False):
     """System prompt, optional Arm 1-style history, the question, then turn - 1 replies and pressure messages."""
     messages = [{"role": "system", "content": SYSTEM}] + (HISTORY * 2 if history else [])
@@ -254,66 +354,57 @@ def dialogue(turn, history=False):
     return messages
 
 
-@pytest.fixture(scope="module", params=sorted(SPECS))
-def loaded(request):
-    pytest.importorskip("transformers")
-    spec = SPECS[request.param]
-    try:
-        return spec, m.load_tokenizer_v4(spec)
-    except Exception as e:                       # gated (Llama off the pod) or offline
-        pytest.skip(f"{spec['id']}: tokenizer not available here ({type(e).__name__})")
-
-
 def rendered(spec, tokenizer, messages):
     # The same call as v2's generate.render, which needs torch to import.
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True,
                                          **spec.get("chat_template_kwargs", {}))
 
 
-def test_forced_text_count_in_five_turn_dialogues(loaded):
-    spec, tok = loaded
-    if not spec["forced_text"]:
-        pytest.skip("no forced text")
+@pytest.mark.parametrize("model_id", FORCED)
+def test_forced_text_count_in_five_turn_dialogues(model_id):
+    spec, tok = tokenizer_for(model_id)
     for history in (False, True):
         for turn in range(1, 6):
             text = rendered(spec, tok, dialogue(turn, history))
-            assert text.count(spec["forced_text"]) == spec["forced_text_count"], (spec["id"], turn, history)
+            assert text.count(spec["forced_text"]) == spec["forced_text_count"], (model_id, turn, history)
 
 
-def test_roles_in_order_and_no_default_text(loaded):
-    spec, tok = loaded
+@pytest.mark.parametrize("model_id", ALL)
+def test_roles_in_order_and_no_default_text(model_id):
+    spec, tok = tokenizer_for(model_id)
     text = rendered(spec, tok, dialogue(3))
     positions = [text.index(SYSTEM), text.index(QUESTION), text.index(REPLY), text.index(CFG["prompts"]["pressure"][1])]
     assert positions == sorted(positions) and text.count(SYSTEM) == 1                # system role, then the turns in order
     found = [d for d in DEFAULT_TEXT if d in text]
-    assert not found, (spec["id"], found)
+    assert not found, (model_id, found)
 
 
-def test_thinking_markers_are_single_tokens(loaded):
-    spec, tok = loaded
-    for marker in spec.get("marker_tokens", []):
+@pytest.mark.parametrize("model_id", MARKED)
+def test_thinking_markers_are_single_tokens(model_id):
+    spec, tok = tokenizer_for(model_id)
+    for marker in spec["marker_tokens"]:
         ids = tok.encode(marker, add_special_tokens=False)
-        assert len(ids) == 1, (spec["id"], marker, ids)
+        assert len(ids) == 1, (model_id, marker, ids)
     if "thinking_block" in spec:                 # Gemma: the block markers are special tokens
         assert {"<|channel>", "<channel|>"} <= set(tok.all_special_tokens) | \
             {t.content for t in tok.added_tokens_decoder.values() if t.special}
         assert m.block_ids(tok, spec["thinking_block"]) == tuple(tok.convert_tokens_to_ids(["<|channel>", "<channel|>"]))
 
 
-def test_shipped_generation_config_passes_the_allowlist(loaded):
+@pytest.mark.parametrize("model_id", ALL)
+def test_shipped_generation_config_passes_the_allowlist(model_id):
     """Each model's generation_config.json at its fixed revision, against transformers' defaults.
     (The config after a full model load is checked again by load_model_v4 on the pod.)"""
-    from transformers import GenerationConfig
-    spec, _ = loaded
-    shipped = GenerationConfig.from_pretrained(spec["id"], revision=spec["revision"]).to_dict()
-    diff = m.check_generation_config(shipped, GenerationConfig().to_dict(), spec["suppress_tokens"], ALLOWED)
-    assert "eos_token_id" in diff, spec["id"]
+    transformers = need("transformers")
+    spec, _ = tokenizer_for(model_id)
+    shipped = transformers.GenerationConfig.from_pretrained(spec["id"], revision=spec["revision"]).to_dict()
+    diff = m.check_generation_config(shipped, transformers.GenerationConfig().to_dict(), spec["suppress_tokens"], ALLOWED)
+    assert "eos_token_id" in diff, model_id
 
 
-def test_mistral_control_tokens_single(loaded):
-    spec, tok = loaded
-    if not spec["id"].startswith("mistralai/"):
-        pytest.skip("Ministral only")
+@pytest.mark.parametrize("model_id", MINISTRAL)
+def test_mistral_control_tokens_single(model_id):
+    spec, tok = tokenizer_for(model_id)
     text = rendered(spec, tok, dialogue(2))
     for ctl in ("[SYSTEM_PROMPT]", "[/SYSTEM_PROMPT]", "[INST]", "[/INST]"):
         assert ctl in text and len(tok.encode(ctl, add_special_tokens=False)) == 1, ctl
@@ -321,30 +412,45 @@ def test_mistral_control_tokens_single(loaded):
 
 # ---------- through v2's generate module (torch; on the pod) ----------
 
-def test_stop_set_has_end_of_turn(loaded):
-    pytest.importorskip("torch")
-    from transformers import GenerationConfig
+@pytest.mark.parametrize("model_id", ALL)
+def test_stop_set_has_end_of_turn(model_id):
+    need("torch")
+    transformers = need("transformers")
     from ds import generate as g
-    spec, tok = loaded
-    gc = GenerationConfig.from_pretrained(spec["id"], revision=spec["revision"])
+    spec, tok = tokenizer_for(model_id)
+    gc = transformers.GenerationConfig.from_pretrained(spec["id"], revision=spec["revision"])
     stops = g.stop_ids(SimpleNamespace(generation_config=gc), tok)
-    assert tok.convert_tokens_to_ids(spec["end_of_turn"]) in stops, spec["id"]
+    assert tok.convert_tokens_to_ids(spec["end_of_turn"]) in stops, model_id
 
 
-def test_v3_models_render_as_in_v3(loaded):
-    """The v4 loader's contexts equal rendering through v3's own code path, byte for byte."""
-    pytest.importorskip("torch")
-    from transformers import AutoTokenizer
-    from ds import generate as g
+def contexts_in_all_arms():
+    """Every kind of context a v3 model sees in v4: Arm 1 and Arm 2 cells at turns 1 to 5, the step e
+    checks, all Arm 3 cells, and the synthetic dialogues."""
+    from ds.dialogue import messages_for_turn
+    from ds.items_v4 import make_bank
     from ds.stimuli_v3 import build_cells_v3
-    spec, tok = loaded
-    if spec["group"] != "v3":
-        pytest.skip("v3 models only")
-    v3_tok = AutoTokenizer.from_pretrained(spec["id"], padding_side="left")          # as v3's load_model
+    from ds.stimuli_v4 import build_cells_v4, build_check_cells_v4
+    bank = make_bank(CFG)
+    picked = bank["current"][::10]
+    v4 = [messages_for_turn(c, ["Okay."] * (t - 1), c["followups"])
+          for c in build_cells_v4(CFG, bank, picked) for t in range(1, 6)]
+    checks = [c["messages"] for c in build_check_cells_v4(CFG, bank, picked)]
+    arm3 = [c["messages"] for c in build_cells_v3(CFG["arm3"])]
+    return v4 + checks + arm3 + [dialogue(t, h) for t in range(1, 6) for h in (False, True)]
+
+
+@pytest.mark.parametrize("model_id", V3_MODELS)
+def test_v3_models_render_as_in_v3(model_id):
+    """The v4 loader's contexts equal rendering through v3's own code path, byte for byte, in all arms.
+    The comparison tokenizer is loaded as v3's load_model did, at v3's recorded revision."""
+    need("torch")
+    transformers = need("transformers")
+    from ds import generate as g
+    spec, tok = tokenizer_for(model_id)
+    v3_tok = transformers.AutoTokenizer.from_pretrained(spec["id"], revision=spec["revision"], padding_side="left")
     kwargs = spec.get("chat_template_kwargs", {})
     _, prepare, render = m.render_parts(tok, spec)
-    contexts = [c["messages"] for c in build_cells_v3(CFG["arm3"])] + [dialogue(t, h) for t in range(1, 6) for h in (0, 1)]
-    for messages in contexts:
+    for messages in contexts_in_all_arms():
         assert render(prepare(messages)) == g.render(v3_tok, messages, kwargs)
-    if spec["id"].startswith("meta-llama/"):
+    if model_id.startswith("meta-llama/"):
         assert "Today Date: 26 Jul 2024" in render(prepare(dialogue(1)))
