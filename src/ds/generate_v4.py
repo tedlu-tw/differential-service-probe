@@ -124,11 +124,12 @@ def with_diagnostics(fn, stash, parts, sink, meta):
 
 def dry_run_report(diagnostics, timing):
     """Per model only: replies, share ending on a stop token, share cut off, empty replies, round trip
-    per tokenizer, seconds per reply."""
-    if not diagnostics:                                   # a resumed run with nothing left to generate
+    per tokenizer, seconds per reply. diagnostics and timing are tables (or lists of rows)."""
+    d, t, rows = pd.DataFrame(diagnostics), pd.DataFrame(timing), []
+    if not len(d):
         return pd.DataFrame(columns=["model", "replies", "share_ended_on_stop", "share_truncated", "empty_replies"])
-    d, rows = pd.DataFrame(diagnostics), []
-    t = pd.DataFrame(timing) if len(timing) else pd.DataFrame(columns=["model", "run", "seconds"])
+    if not len(t):
+        t = pd.DataFrame(columns=["model", "run", "seconds"])
     for model, g in d.groupby("model", sort=False):
         row = {"model": model, "replies": len(g), "share_ended_on_stop": g["ended_on_stop"].mean(),
                "share_truncated": g["truncated"].mean(), "empty_replies": int(g["empty"].sum())}
@@ -139,51 +140,81 @@ def dry_run_report(diagnostics, timing):
     return pd.DataFrame(rows)
 
 
+def read_rows(path):
+    return pd.read_csv(path, keep_default_na=False) if Path(path).exists() else pd.DataFrame()
+
+
+def check_report_counts(report, cfg, source):
+    """Per model, the report's reply count must equal that model's rows in the two dry-run reply files."""
+    replies = pd.concat([read_rows(out_path(cfg, k, source)) for k in ("dry_run_csv", "dry_run_arm3_csv")])
+    logged = replies.groupby("model").size().to_dict() if len(replies) else {}
+    reported = dict(zip(report["model"], report["replies"]))
+    wrong = {m: (reported.get(m, 0), logged.get(m, 0)) for m in set(logged) | set(reported)
+             if reported.get(m, 0) != logged.get(m, 0)}
+    if wrong:
+        raise SystemExit(f"dry-run report and reply files differ (report, replies) for: {wrong}")
+
+
+def report_from_files(cfg, source):
+    """The dry-run report from dry_run_diagnostics.csv and timing.csv on disk, across every model there."""
+    timing = read_rows(out_path(cfg, "timing_csv", source))
+    report = dry_run_report(read_rows(out_path(cfg, "dry_run_diagnostics_csv", source)),
+                            timing[timing["run"] == "dry_run"] if len(timing) else timing)
+    check_report_counts(report, cfg, source)
+    return report
+
+
 # ---------- running ----------
 
-def run_one_arm(parts, cfg, arm, cells, answers, source, sinks):
+def batch_writer(cfg, source, path, pending):
+    """on_rows: append a batch's replies, then its diagnostics and timing, so the three files grow
+    together and a crash loses at most the batch in progress."""
+    def write(rows):
+        append_rows(path, rows)
+        for key, name in (("dry_run_diagnostics_csv", "diagnostics"), ("timing_csv", "timing")):
+            if pending[name]:
+                append_rows(out_path(cfg, key, source), pending[name])
+                pending[name].clear()
+    return write
+
+
+def run_one_arm(parts, cfg, arm, cells, answers, source):
     """One arm of the dry run for one model: its own settings, contexts, run info, every seed."""
     spec, run = parts["spec"], "dry_run"
-    gen, stash = resolved_generation(cfg, spec["id"], arm), {}
+    gen, stash, pending = resolved_generation(cfg, spec["id"], arm), {}, {"diagnostics": [], "timing": []}
     append_jsonl(out_path(cfg, "run_info_jsonl", source), run_info_row(parts, run, arm, gen))
     contexts = out_path(cfg, "contexts_csv", source)
     if not contexts_written(contexts, spec["id"], run, arm):          # a resumed run does not repeat them
         append_rows(contexts, context_rows(parts, cells, run))
-    log = lambda batch, seconds: sinks["timing"].extend(timing_rows(spec["id"], run, batch, seconds))
+    log = lambda batch, seconds: pending["timing"].extend(timing_rows(spec["id"], run, batch, seconds))
     base = make_reply_fn(parts["prepare"], parts["render"], parts["make_generate"](gen, stash), log)
-    failure_log = (out_path(cfg, "failures_jsonl", source), {"model": spec["id"], "run": run})
-    extra = {"model": spec["id"], "revision": spec["revision"], "precision": parts["info"]["precision"],
-             "system_mode": parts["mode"]}
+    diag = lambda fn: with_diagnostics(fn, stash, parts, pending["diagnostics"], {"model": spec["id"], "run": run})
+    common = {"failure_log": (out_path(cfg, "failures_jsonl", source), {"model": spec["id"], "run": run}),
+              "extra": {"model": spec["id"], "revision": spec["revision"], "precision": parts["info"]["precision"],
+                        "system_mode": parts["mode"]}}
+    path = out_path(cfg, "dry_run_arm3_csv" if arm == "arm3" else "dry_run_csv", source)
     for seed in seeds_for(cfg, spec, run):
         parts["set_seed"](seed)
-        diag = lambda fn: with_diagnostics(fn, stash, parts, sinks["diagnostics"], {"model": spec["id"], "run": run})
+        common.update(done_rows=load_done_rows(path, spec["id"]), on_rows=batch_writer(cfg, source, path, pending))
         if arm == "arm3":
-            path = out_path(cfg, "dry_run_arm3_csv", source)
-            run_arm3(cells, seed, diag(base), answers, cfg["arm3"], stash, failure_log=failure_log, extra=extra,
-                     done_rows=load_done_rows(path, spec["id"]), on_rows=lambda rows: append_rows(path, rows))
+            run_arm3(cells, seed, diag(base), answers, cfg["arm3"], stash, **common)
         else:
-            path = out_path(cfg, "dry_run_csv", source)
             run_dialogues_v4(cells, seed, diag(with_raw(base, stash)), answers, cfg["arms"][arm]["max_turns"],
-                             gen["batch_size"], failure_log=failure_log, extra=extra,
-                             done_rows=load_done_rows(path, spec["id"]), on_rows=lambda rows: append_rows(path, rows))
+                             gen["batch_size"], **common)
 
 
 def run_dry_run(cfg, bank, make_parts, source, model_id=None):
-    """Step b: every arm for every model (or one), then the per-model report."""
+    """Step b: every arm for every model (or one), then the per-model report, rebuilt from the files."""
     specs = [s for s in cfg["models"] if model_id in (None, s["id"])]
     if not specs:
         raise SystemExit(f"{model_id} is not a model id in the config")
     cells, answers = dry_run_cells(cfg, bank)
-    sinks = {"diagnostics": [], "timing": []}
     for spec in specs:
         parts = make_parts(spec, cfg)
         for arm in ("arm1", "arm2", "arm3"):
-            run_one_arm(parts, cfg, arm, cells[arm], answers, source, sinks)
+            run_one_arm(parts, cfg, arm, cells[arm], answers, source)
         parts["close"]()
-    for key, rows in (("timing_csv", sinks["timing"]), ("dry_run_diagnostics_csv", sinks["diagnostics"])):
-        if rows:
-            append_rows(out_path(cfg, key, source), rows)
-    report = dry_run_report(sinks["diagnostics"], sinks["timing"])
+    report = report_from_files(cfg, source)
     report.to_csv(out_path(cfg, "dry_run_report_csv", source), index=False)
     return report
 

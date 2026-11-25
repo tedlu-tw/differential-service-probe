@@ -1,16 +1,17 @@
 """Environment reproduction check (docs/protocol_v4.md: step b). Descriptive, not a gate.
 
-For each v3 model, rerun v3's first turn-1 batch of seed 0 exactly as v3 ran it, through v3's own
-code (generate_v3.gpu_parts): v3's full cell list and order, set_seed(0), batch size 16, 512 new
-tokens. Compare each reply with the one v3 logged.
+For each v3 model, rerun v3's first turn-1 batch of seed 0 through the code Arm 3 uses: load_model_v4
+at the revision recorded for v3, render_parts, make_generate and v3's make_reply_fn, with Arm 3's
+settings (batch size 16, 512 new tokens), set_seed(0) after loading, and v3's full cell list and order.
+Compare each reply with the one v3 logged. A pass shows that Arm 3's own pipeline reproduces v3.
 
-On the pod, in the v4 environment, on the GPU type v3 used, from the repo root:
+On the pod, in the v4 environment, on the GPU type v3 used (NVIDIA A40), from the repo root:
 
-    PYTHONPATH=src python scripts/repro_v3.py --v3-replies /local/path/to/v3/replies.csv [--model MODEL_ID]
+    PYTHONPATH=src python scripts/repro_v3.py --v3-replies /workspace/private/v3_replies.csv [--model MODEL_ID]
 
 v3's replies are private: they are read from the path given, never copied into the repo, and the
-output (results_v4/repro_v3.jsonl, one line per run) keeps only counts, cell keys, first differing token positions and
-the file's SHA-256, never reply text.
+output (results_v4/repro_v3.jsonl, one line per run) keeps only counts, cell keys, first differing
+token positions, the GPU and the file's SHA-256, never reply text.
 
 Pass: every reply of the first batch is identical to v3's. Otherwise the share identical and, for
 each differing reply, the first token position where it differs (both texts re-encoded with the
@@ -18,10 +19,8 @@ model's tokenizer). A mismatch does not stop the run; log a deviations row.
 """
 import argparse
 import datetime
-import gc
 import hashlib
 import json
-import os
 from pathlib import Path
 
 import pandas as pd
@@ -78,36 +77,36 @@ def file_sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def cached_revision(model_id):
-    """The commit the local Hugging Face cache's main ref points to (what v3's load_model loads)."""
-    from huggingface_hub import scan_cache_dir
-    for repo in scan_cache_dir().repos:
-        if repo.repo_id == model_id:
-            return next((r.commit_hash for r in repo.revisions if "main" in r.refs), None)
-    return None
+# ---------- the run: v3's first batch through Arm 3's own pipeline ----------
 
-
-# ---------- the GPU run ----------
-
-def check_model(spec, v3cfg, replies_path):
-    """v3's first batch for one model through v3's own gpu_parts, compared with v3's logged replies."""
-    from ds import generate as g
-    from ds.generate_v3 import gpu_parts as v3_gpu_parts
-    from ds.models_v4 import load_tokenizer_v4
-    found = cached_revision(spec["id"])
-    if found != spec["revision"]:
-        raise SystemExit(f"{spec['id']}: the cache loads {found}, not v3's revision {spec['revision']}")
+def rerun_first_batch(spec, cfg, v3cfg, make_parts):
+    """Load the model as Arm 3 does (load_model_v4 at the pinned revision), render and generate with
+    Arm 3's code and settings (batch size 16, 512 new tokens), set_seed(0) after loading, and return
+    the replies to v3's first batch, in its order."""
+    from ds.generate_v3 import make_reply_fn
+    from ds.models_v4 import resolved_generation
     states = first_batch_states(v3cfg)
-    v3_spec = next(m for m in v3cfg["models"] if m["id"] == spec["id"])
-    _, prepare, render, generate = v3_gpu_parts(v3_spec, v3cfg)
-    g.set_seed(0)
-    new, _ = generate([render(prepare(s["messages"])) for s in states])
-    del generate, prepare, render                      # the model lives in these closures; free it
-    gc.collect()
-    g.torch.cuda.empty_cache()
+    gen = resolved_generation(cfg, spec["id"], "arm3")
+    if gen["batch_size"] != len(states):
+        raise SystemExit(f"Arm 3's batch size {gen['batch_size']} differs from v3's first batch ({len(states)})")
+    parts, stash = make_parts(spec, cfg), {}
+    reply_fn = make_reply_fn(parts["prepare"], parts["render"], parts["make_generate"](gen, stash), lambda b, s: None)
+    parts["set_seed"](0)
+    new = [reply for reply, _ in reply_fn(states)]
+    gpu = parts["gpu"]
+    parts["close"]()
+    return states, new, gpu
+
+
+def check_model(spec, cfg, v3cfg, replies_path, make_parts, encode):
+    states, new, gpu = rerun_first_batch(spec, cfg, v3cfg, make_parts)
+    return {**compare(new, archived_first_batch(replies_path, spec["id"], states), states, encode(spec)), "gpu": gpu}
+
+
+def tokenizer_encoder(spec):
+    from ds.models_v4 import load_tokenizer_v4
     tokenizer = load_tokenizer_v4(spec)
-    encode = lambda text: tokenizer(text, add_special_tokens=False)["input_ids"]
-    return compare(new, archived_first_batch(replies_path, spec["id"], states), states, encode)
+    return lambda text: tokenizer(text, add_special_tokens=False)["input_ids"]
 
 
 def main():
@@ -116,14 +115,13 @@ def main():
     p.add_argument("--model", help="one v3 model id (default: all three)")
     p.add_argument("--config", default=str(ROOT / "configs" / "experiment_v4.yaml"))
     args = p.parse_args()
-    os.environ["HF_HUB_OFFLINE"] = "1"                 # load only what is cached: v3's snapshots
-    from ds.generate_v4 import append_jsonl, gpu_info
+    from ds.generate_v4 import append_jsonl, gpu_parts
     from ds.models_v4 import package_versions
     cfg, v3cfg = load_config(args.config), load_config(ROOT / "configs" / "experiment_v3.yaml")
     specs = [s for s in cfg["models"] if s["group"] == "v3" and args.model in (None, s["id"])]
-    out = {"replies_file_sha256": file_sha256(args.v3_replies), "gpu": gpu_info(), "packages": package_versions(),
+    out = {"replies_file_sha256": file_sha256(args.v3_replies), "packages": package_versions(),
            "written": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-           "models": {s["id"]: check_model(s, v3cfg, args.v3_replies) for s in specs}}
+           "models": {s["id"]: check_model(s, cfg, v3cfg, args.v3_replies, gpu_parts, tokenizer_encoder) for s in specs}}
     append_jsonl(ROOT / cfg["paths"]["repro_v3_jsonl"], out)
     print(json.dumps({m: {k: r[k] for k in ("n", "identical", "share_identical", "passes")}
                       for m, r in out["models"].items()}, indent=2))

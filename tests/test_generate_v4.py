@@ -114,3 +114,58 @@ def test_ministral_also_round_trips_without_the_fix(monkeypatch):
     assert gv.roundtrip_tokenizers(ministral, CFG, "own") == {"own": "own", "fix_mistral_regex_false": "tok"}
     assert loaded == [{"fix_mistral_regex": False}]
     assert gv.roundtrip_tokenizers(SPECS["microsoft/phi-4"], CFG, "own") == {"own": "own"}
+
+
+@pytest.fixture
+def fresh_cfg(tmp_path):
+    cfg = copy.deepcopy(CFG)
+    cfg["paths"]["mock_dir"] = str(tmp_path / "mock")
+    return cfg
+
+
+def test_report_built_from_files_across_separate_runs(fresh_cfg, bank):
+    """One model per run: the report covers every model on disk, and a resume with nothing left keeps it."""
+    llama, qwen = "meta-llama/Llama-3.1-8B-Instruct", "Qwen/Qwen3-8B"
+    gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id=llama)
+    report = gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id=qwen)
+    assert list(report["model"]) == [llama, qwen] and list(report["replies"]) == [850, 850]
+    again = gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id=qwen)       # nothing left to generate
+    assert again.equals(report)
+    on_disk = pd.read_csv(gv.out_path(fresh_cfg, "dry_run_report_csv", "mock"))
+    assert list(on_disk["model"]) == [llama, qwen]
+
+
+def test_missing_diagnostics_row_stops_the_report(fresh_cfg, bank):
+    gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id="microsoft/phi-4")
+    path = gv.out_path(fresh_cfg, "dry_run_diagnostics_csv", "mock")
+    lines = path.read_text().splitlines()
+    path.write_text("\n".join(lines[:-1]) + "\n")                                   # one diagnostics row lost
+    with pytest.raises(SystemExit, match="microsoft/phi-4"):
+        gv.report_from_files(fresh_cfg, "mock")
+
+
+def test_diagnostics_written_with_each_batch(fresh_cfg, bank):
+    """A crash part-way keeps the diagnostics of every batch whose replies were written."""
+    calls = {"n": 0}
+
+    def crashing_parts(spec, cfg):
+        parts = gv.mock_parts(spec, cfg)
+        make = parts["make_generate"]
+
+        def make_generate(gen, stash):
+            generate = make(gen, stash)
+
+            def maybe_crash(prompts):
+                calls["n"] += 1
+                if calls["n"] == 5:
+                    raise RuntimeError("pod stopped")
+                return generate(prompts)
+            return maybe_crash
+        return {**parts, "make_generate": make_generate}
+    with pytest.raises(RuntimeError, match="pod stopped"):
+        gv.run_dry_run(fresh_cfg, bank, crashing_parts, "mock", model_id="microsoft/phi-4")
+    replies = pd.read_csv(gv.out_path(fresh_cfg, "dry_run_csv", "mock"))
+    diagnostics = pd.read_csv(gv.out_path(fresh_cfg, "dry_run_diagnostics_csv", "mock"))
+    assert len(replies) == len(diagnostics) > 0
+    report = gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id="microsoft/phi-4")   # resume
+    assert list(report["replies"]) == [850]

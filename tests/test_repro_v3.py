@@ -68,3 +68,44 @@ def test_missing_first_batch_cells_stop_the_check(tmp_path):
     path, _ = fake_replies(tmp_path, states[:10])
     with pytest.raises(SystemExit, match="not in"):
         r.archived_first_batch(path, "m", states)
+
+
+V4 = load_config(ROOT / "configs" / "experiment_v4.yaml")
+MOCK_REPLY = "Let us think about which operation links the numbers."
+
+
+def recording_parts(seen):
+    """Mock parts that record the settings make_generate receives and when the seed is set."""
+    from ds.generate_v4 import mock_parts
+
+    def make(spec, cfg):
+        parts = mock_parts(spec, cfg)
+        make_generate = parts["make_generate"]
+        return {**parts, "make_generate": lambda gen, stash: seen.append(("gen", gen)) or make_generate(gen, stash),
+                "set_seed": lambda seed: seen.append(("seed", seed)), "gpu": {"name": "mock"}}
+    return make
+
+
+def test_rerun_uses_arm3s_pipeline_and_settings():
+    seen, spec = [], next(s for s in V4["models"] if s["group"] == "v3")
+    states, new, gpu = r.rerun_first_batch(spec, V4, V3, recording_parts(seen))
+    gens = [g for kind, g in seen if kind == "gen"]
+    assert gens == [V4["arm3"]["generation"]] and gens[0]["max_new_tokens"] == 512 and gens[0]["batch_size"] == 16
+    assert [k for k, _ in seen] == ["gen", "seed"] and ("seed", 0) in seen      # seed set after loading
+    assert states == r.first_batch_states(V3) and new == [MOCK_REPLY] * 16 and gpu == {"name": "mock"}
+
+
+def test_check_model_on_the_mock(tmp_path):
+    spec = next(s for s in V4["models"] if s["group"] == "v3")
+    states = r.first_batch_states(V3)
+    rows = [{"model": spec["id"], "seed": 0, "turn": 1, **{k: s[k] for k in r.V3_KEY}, "reply": MOCK_REPLY} for s in states]
+    path = tmp_path / "replies.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    encode = lambda spec: str.split
+    result = r.check_model(spec, V4, V3, path, recording_parts([]), encode)
+    assert result["passes"] and result["identical"] == 16 and result["gpu"] == {"name": "mock"}
+    rows[5]["reply"] = "Let us think about which number comes next."
+    pd.DataFrame(rows).to_csv(path, index=False)
+    result = r.check_model(spec, V4, V3, path, recording_parts([]), encode)
+    assert not result["passes"] and result["identical"] == 15
+    assert result["differences"][0]["first_token_differs"] == 5                  # "operation" vs "number"

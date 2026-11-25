@@ -395,7 +395,13 @@ Check:
 Apply the replacement rule here if needed. No contrasts are computed. The dry-run report is per model only: how replies end, the round trip, empty replies and timing. It shows no `gives_answer`, answer turn or other outcome measure by condition or arm, so the `after_attempt` and prompt B cells stay unseen, as in the pilot.
 
 **Environment reproduction check (descriptive, not a gate),** in the first pod session, for each v3 model:
-- **What runs:** v3's first turn-1 batch of seed 0, exactly as v3 ran it, through v3's own code (`generate_v3.gpu_parts`): v3's full cell list and order, `set_seed(0)`, batch size 16, 512 new tokens. The loaded snapshot's commit must equal the revision recorded in `docs/deviations_v3.md`, otherwise the check stops.
+- **What runs:** v3's first turn-1 batch of seed 0 (v3's full cell list and order), through the code Arm 3 itself uses:
+    - `load_model_v4`, at the revision recorded in `docs/deviations_v3.md`,
+    - `render_parts`, `make_generate` and v3's `make_reply_fn`,
+    - Arm 3's settings (batch size 16, 512 new tokens),
+    - `set_seed(0)` after loading.
+
+  A pass therefore shows that Arm 3's own pipeline reproduces v3 on the v3 models.
 - **v3's replies stay private:** they are read from a local path given on the command line. The file is never committed, and the log keeps only counts and the file's SHA-256.
 - **Hardware:** the pod records the GPU name, driver version and CUDA version in `run_info.jsonl`. The check runs on the GPU type v3 used (NVIDIA A40); bf16 results can differ across GPU types, so a different type is expected to break an exact match.
 - **Reading:**
