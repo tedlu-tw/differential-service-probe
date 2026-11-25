@@ -161,6 +161,8 @@ def run_arm3(cells, seed, reply_fn, answers, arm3_cfg, stash, *, failure_log, do
     path, meta = failure_log
     run = run_name(failure_log)
     arm = "arm3" if run in ARM3_RUNS else None
+    if arm and any(c["condition"] == "solve" for c in cells):         # the label must not be wrong
+        raise ValueError(f"run {run} labels its rows arm3, but solve cells were passed; use run v3_solve")
     reply_fn = log_failures(reply_fn, path, {**({"arm": arm} if arm else {}), **meta})
 
     def add_raw(rows):

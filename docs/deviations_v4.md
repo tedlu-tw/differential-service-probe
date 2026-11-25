@@ -11,6 +11,11 @@ When the v4 protocol was drafted (2026-11-21), these had been seen:
 - **v3b:** a replication of v3 on the four new models was drafted and withdrawn before any model run. No v3b data exist.
 - **v4:** no data. No v4 model or judge had been run.
 - **Model choice:** made from model cards, chat templates, generation configs and the Hugging Face model API only.
+- **Planned before the freeze:**
+    - The dry run shows Arm 1 replies on 12 of the 100 current questions, 3 per family.
+    - The step d sheet stays blind (problem and reply only).
+    - The dry-run report shows nothing by condition or arm.
+    - The pilot reports outcomes only for prompt A `demand` cells.
 
 ## Run log
 

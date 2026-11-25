@@ -379,7 +379,11 @@ In this order, all logged in `docs/deviations_v4.md`.
 
 **Pod checkpoint, before the dry run.** The full test suite runs on the pod, in the v4 environment, with Hugging Face access to Llama and with `REQUIRE_ALL=1`, so that none of the pod-only tests is skipped. These are the Llama template tests, the stop sets, and v3 rendering byte for byte. Under `REQUIRE_ALL=1`, a model-dependent test that cannot run (a missing package, or a tokenizer that does not load) fails instead of skipping. Only the reproduction checks on the private v2 and v3 replies skip on the pod; they run on the author's machine. The result (passed, failed and skipped counts, and any skip reason) is recorded in the run log. Any failure or skip of a pod-only test stops the work before the dry run.
 
-**b) Dry run, per model.** 5 questions × every cell of the three arms × 1 seed. Check:
+**b) Dry run, per model.** 1 seed, every cell of the three arms:
+- **Arm 1:** 12 of the 100 current questions, 3 per family, at positions 0, 8 and 16 of each family's list, so that step d's Arm 1 items do not lean on one family.
+- **Arms 2 and 3:** 5 questions each, by v3's every-nth rule (v4's current questions for Arm 2, v3's questions for Arm 3).
+
+Check:
 - loading, versions and revision,
 - templates, forced text and `system_mode`,
 - thinking-tag stripping,
@@ -388,7 +392,16 @@ In this order, all logged in `docs/deviations_v4.md`.
 - how replies end, per model: the share that end on a stop token, and the share cut off at `max_new_tokens`,
 - tokenizer round trip, for all seven models: the share of replies whose token IDs (special tokens left out) differ when their decoded text is re-encoded. A reply is fed back as text, so a difference means the model sees other tokens on the next turn. For Ministral, this is reported both with and without `fix_mistral_regex`.
 
-Apply the replacement rule here if needed. No contrasts are computed.
+Apply the replacement rule here if needed. No contrasts are computed. The dry-run report is per model only: how replies end, the round trip, empty replies and timing. It shows no `gives_answer`, answer turn or other outcome measure by condition or arm, so the `after_attempt` and prompt B cells stay unseen, as in the pilot.
+
+**Environment reproduction check (descriptive, not a gate),** in the first pod session, for each v3 model:
+- **What runs:** v3's first turn-1 batch of seed 0, exactly as v3 ran it, through v3's own code (`generate_v3.gpu_parts`): v3's full cell list and order, `set_seed(0)`, batch size 16, 512 new tokens. The loaded snapshot's commit must equal the revision recorded in `docs/deviations_v3.md`, otherwise the check stops.
+- **v3's replies stay private:** they are read from a local path given on the command line. The file is never committed, and the log keeps only counts and the file's SHA-256.
+- **Hardware:** the pod records the GPU name, driver version and CUDA version in `run_info.jsonl`. The check runs on the GPU type v3 used (NVIDIA A40); bf16 results can differ across GPU types, so a different type is expected to break an exact match.
+- **Reading:**
+    - **Pass:** every reply of the first batch is identical to v3's reply, as v3 logged it.
+    - **Otherwise:** the share identical is reported, and for each differing reply the first token position where it differs (both texts re-encoded with the model's tokenizer). A deviations row is logged.
+    - **A mismatch does not stop the run.** Arm 3's test-retest compares distributions, not replies. But the write-up then says the v3 environment was not reproduced exactly.
 
 **c) Pilots, per model.** No contrasts are computed.
 - **Neutral pilot:** Arm 2 cells with prompts A and B, 1 seed, 50 questions (every second question).
@@ -403,7 +416,7 @@ Apply the replacement rule here if needed. No contrasts are computed.
     - drawn only from the neutral pilot's prompt A `demand` cells and from the dry run. Every `after_attempt` reply and every prompt B reply is excluded, from the pilot and from the dry run alike, so they stay unseen before the freeze,
     - stratified by the judge's output and by model (at least 20 per model),
     - each `guidance_level` value at least 10 times wherever the replies have that many,
-    - at least 50 of the 150 are Arm 1 turn-1 replies from the dry run, since RQ1 is measured on those,
+    - at least 50 of the 150 are Arm 1 turn-1 replies from the dry run, since RQ1 is measured on those: at least 10 per family and at least 6 per model, with no question supplying more than 5,
     - the `remediation` items drawn from the dry run's Arm 1 struggle cells,
     - **later turns for `gives_answer`:** the sample includes replies from turns 2 to 5, with each `gives_answer` value at least 10 times among them, wherever the replies have that many. The exclusions above still apply. These replies are labelled for `gives_answer` only; turn-1 replies are labelled for every measure that applies to them.
 - **Sheet:** the problem and the reply (plus the earlier exchanges for `remediation`, and for a later-turn reply) only.

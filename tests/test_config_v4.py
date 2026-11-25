@@ -74,7 +74,13 @@ def test_outputs_private_and_validation_never_sees_hidden_cells():
 
 def test_step_d_sample_and_family_pair_analyses():
     v = V4["validate"]
-    assert v["n"] == 150 and v["min_arm1_turn1_from_dry_run"] == 50 and v["min_per_model"] == 20
+    assert v["n"] == 150 and v["min_per_model"] == 20
+    assert v["arm1_turn1"] == {"min": 50, "min_per_family": 10, "min_per_model": 6, "max_per_question": 5}
+    a1 = v["arm1_turn1"]
+    n_q = len(V4["dry_run"]["arm1_positions"]) * len(V4["items"]["families"])
+    assert n_q * a1["max_per_question"] >= a1["min"]                             # the limits can all be met
+    assert len(V4["dry_run"]["arm1_positions"]) * a1["max_per_question"] >= a1["min_per_family"]
+    assert len(V4["models"]) * a1["min_per_model"] <= a1["min"]
     assert v["later_turns"] == {"turns": [2, 3, 4, 5], "min_per_value": 10}
     ex = V4["analysis"]["exploratory"]
     assert ex["u_by_family_pair"]["by"] == ex["relevance_by_family_pair"]["by"] == ["current_family", "unmatched_family"]

@@ -13,7 +13,11 @@ paths:
     results_dir: results_v4
     replies_csv: results_v4/replies.csv              # Arms 1 and 2: one row per tutor reply
     arm3_replies_csv: results_v4/arm3_replies.csv    # Arm 3: one row per tutor reply, v3's columns plus raw_reply
-    dry_run_csv: results_v4/replies_dry_run.csv      # step b, every arm
+    dry_run_csv: results_v4/replies_dry_run.csv      # step b, Arms 1 and 2
+    dry_run_arm3_csv: results_v4/replies_dry_run_arm3.csv   # step b, Arm 3 (v3's cells and key)
+    dry_run_diagnostics_csv: results_v4/dry_run_diagnostics.csv   # per reply: model, run, turn and how it ended; no cell keys
+    dry_run_report_csv: results_v4/dry_run_report.csv  # per model only
+    repro_v3_jsonl: results_v4/repro_v3.jsonl        # reproduction check, one line per run: counts and the replies file's SHA-256, no text
     pilot_csv: results_v4/pilot_replies.csv          # step c: neutral pilot (Arm 2 cells)
     solve_csv: results_v4/solve_replies.csv          # step c: accuracy with working on the v4 questions
     v3_pilot_csv: results_v4/v3_pilot_replies.csv    # step c: v3's step a pilot, four new models
@@ -230,6 +234,10 @@ environment:                 # pinned as in v3; checked at load and written to r
 # ---------- pre-freeze steps (protocol: Pre-freeze steps) ----------
 
 dry_run:                     # step b
+    # Arm 1: 3 questions per family, at these positions in each family's current list (12 in all), so
+    # the step d sample's Arm 1 turn-1 items do not lean on one family. Arms 2 and 3: n_questions, by
+    # v3's every-nth rule (v4's current questions for Arm 2, v3's questions for Arm 3).
+    arm1_positions: [0, 8, 16]
     n_questions: 5
     seeds: [0]
     # Tokenizer round trip: every model with its own tokenizer, and these models again with the
@@ -261,7 +269,11 @@ validate:                    # step d
             exclude: {prompt: B, pressure: after_attempt}   # either one excludes a reply
     remediation_source: {run: dry_run, arm: arm1,
                          conditions: [history_matched_struggle, history_unmatched_struggle]}
-    min_arm1_turn1_from_dry_run: 50      # of the 150: RQ1 is measured on Arm 1 turn-1 replies
+    arm1_turn1:                          # of the 150: RQ1 is measured on Arm 1 turn-1 replies
+        min: 50                          # from the dry run's 12 Arm 1 questions
+        min_per_family: 10
+        min_per_model: 6
+        max_per_question: 5
     later_turns:                         # gives_answer only; the exclusions in sources still apply
         turns: [2, 3, 4, 5]
         min_per_value: 10                # each gives_answer value, where the replies have that many

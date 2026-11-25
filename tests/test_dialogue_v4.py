@@ -170,6 +170,15 @@ def test_rows_labelled_by_run(setup):
             run_arm3(solve, 0, solver, {}, single_turn(arm3), stash, failure_log=(os.devnull, bad))
 
 
+def test_arm3_label_refuses_solve_cells():
+    arm3 = CFG["arm3"]
+    questions = make_questions_v3(arm3)
+    solve = build_solve_cells_v3(single_turn(arm3), questions[:2])
+    for run in ("arm3", "dry_run"):
+        with pytest.raises(ValueError, match="solve cells"):
+            run_arm3(solve, 0, lambda batch: [], {}, single_turn(arm3), {}, failure_log=(os.devnull, {"model": "m", "run": run}))
+
+
 def test_with_raw_takes_the_stash_of_the_same_batch():
     stash = {}
 
