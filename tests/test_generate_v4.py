@@ -169,3 +169,55 @@ def test_diagnostics_written_with_each_batch(fresh_cfg, bank):
     assert len(replies) == len(diagnostics) > 0
     report = gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id="microsoft/phi-4")   # resume
     assert list(report["replies"]) == [850]
+
+
+MINISTRAL = "mistralai/Ministral-3-8B-Instruct-2512-BF16"
+EXTRA = "roundtrip_differs_fix_mistral_regex_false"
+
+
+def test_diagnostics_have_fixed_columns_whoever_writes_first(dry):
+    """The pod failure: Llama wrote the header, Ministral's rows had a 9th field. Now every row has every column."""
+    assert list(dry["diag"].columns) == gv.diagnostics_columns(CFG) and EXTRA in gv.diagnostics_columns(CFG)
+    diag = gv.read_diagnostics(gv.out_path(dry["cfg"], "dry_run_diagnostics_csv", "mock"), CFG)
+    assert diag.loc[diag["model"] == MINISTRAL, EXTRA].notna().all()
+    assert diag.loc[diag["model"] != MINISTRAL, EXTRA].isna().all()
+    assert dry["report"].set_index("model")["share_" + EXTRA].notna().sum() == 1
+
+
+def legacy_file(path):
+    """The file as the pod wrote it: the header from Llama's rows, then Ministral's rows with one more field."""
+    from ds.generate_v3 import append_rows
+    base = {"run": "dry_run", "turn": 1, "n_tokens": 7, "ended_on_stop": True, "truncated": False, "empty": False}
+    append_rows(path, [{"model": "meta-llama/Llama-3.1-8B-Instruct", **base, "roundtrip_differs_own": False}] * 2)
+    append_rows(path, [{"model": MINISTRAL, **base, "roundtrip_differs_own": False, EXTRA: True}] * 3)
+    append_rows(path, [{"model": "microsoft/phi-4", **base, "roundtrip_differs_own": True}])
+
+
+def test_reads_the_file_the_pod_wrote(tmp_path):
+    path = tmp_path / "diag.csv"
+    legacy_file(path)
+    lines = path.read_text().splitlines()
+    assert lines[0].count(",") == 7 and lines[3].count(",") == 8                  # the mismatch pandas refused
+    diag = gv.read_diagnostics(path, CFG)
+    assert list(diag.columns) == gv.diagnostics_columns(CFG) and len(diag) == 6
+    assert list(diag[EXTRA].fillna(-1)) == [-1, -1, 1.0, 1.0, 1.0, -1]
+    assert list(diag["roundtrip_differs_own"]) == [0.0] * 5 + [1.0] and (diag["turn"] == 1).all()
+    report = gv.dry_run_report(diag, pd.DataFrame(columns=["model", "run", "seconds"]))
+    assert list(report["replies"]) == [2, 3, 1] and (report["share_ended_on_stop"] == 1.0).all()
+
+
+def test_a_row_with_the_wrong_field_count_stops_the_read(tmp_path):
+    path = tmp_path / "diag.csv"
+    legacy_file(path)
+    path.write_text(path.read_text() + "microsoft/phi-4,dry_run,1,7,True,False,False,False,True\n")
+    with pytest.raises(SystemExit, match="microsoft/phi-4: 9 fields, expected 8 or 8"):
+        gv.read_diagnostics(path, CFG)
+
+
+def test_report_only_mode_loads_no_model(fresh_cfg, bank, monkeypatch):
+    gv.run_dry_run(fresh_cfg, bank, gv.mock_parts, "mock", model_id=MINISTRAL)
+    report_path = gv.out_path(fresh_cfg, "dry_run_report_csv", "mock")
+    report_path.unlink()
+    monkeypatch.setattr(gv, "mock_parts", lambda *a: pytest.fail("a model was loaded"))
+    report = gv.write_report(fresh_cfg, "mock")
+    assert list(report["model"]) == [MINISTRAL] and report_path.exists()

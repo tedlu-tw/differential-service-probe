@@ -13,6 +13,7 @@ log_failures, and every row names its run.
 The dry-run report is per model only (protocol: step b): how replies end, the round trip, empty
 replies and timing. It holds no gives_answer, answer turn or other outcome by condition or arm.
 """
+import csv
 import datetime
 import json
 import subprocess
@@ -107,6 +108,21 @@ def contexts_written(path, model_id, run, arm):
     return bool(((df["model"] == model_id) & (df["run"] == run) & (df["arm"] == arm)).any())
 
 
+DIAG_BASE = ["model", "run", "turn", "n_tokens", "ended_on_stop", "truncated", "empty", "roundtrip_differs_own"]
+DIAG_BOOL = {"True": 1.0, "False": 0.0, "": float("nan")}
+
+
+def roundtrip_columns(cfg, model_id=None):
+    """The extra round-trip columns of dry_run.roundtrip_also, in config order, for one model or all."""
+    also = cfg["dry_run"].get("roundtrip_also", {})
+    return [f"roundtrip_differs_{roundtrip_name(o)}" for m, o in also.items() if model_id in (None, m)]
+
+
+def diagnostics_columns(cfg):
+    """Fixed for every model, so the file's header holds whichever model writes first."""
+    return DIAG_BASE + roundtrip_columns(cfg)
+
+
 def with_diagnostics(fn, stash, parts, sink, meta):
     """Per-reply dry-run diagnostics, kept apart from the replies: model, run and turn only, no cell keys,
     so the report cannot be broken down by condition or arm."""
@@ -144,6 +160,38 @@ def read_rows(path):
     return pd.read_csv(path, keep_default_na=False) if Path(path).exists() else pd.DataFrame()
 
 
+def diagnostics_row(fields, header, cfg):
+    """One line of the diagnostics file as a dict. A file begun before the columns were fixed has the
+    base header only; a model with extra round trips wrote them after the base fields, in config order."""
+    own = DIAG_BASE + roundtrip_columns(cfg, fields[0])
+    if len(fields) == len(header):
+        return dict(zip(header, fields))
+    if len(fields) == len(own):
+        return dict(zip(own, fields))
+    raise SystemExit(f"diagnostics row of {fields[0]}: {len(fields)} fields, expected {len(header)} or {len(own)}")
+
+
+def read_diagnostics(path, cfg):
+    """dry_run_diagnostics.csv against the fixed columns: turn and n_tokens as int, the flags as 1.0,
+    0.0, or NaN where a model has no such round trip."""
+    cols = diagnostics_columns(cfg)
+    if not Path(path).exists():
+        return pd.DataFrame(columns=cols)
+    with open(path, newline="") as f:
+        header, *lines = list(csv.reader(f))
+    if header != cols[:len(header)]:
+        raise SystemExit(f"{path}: header {header} is not a prefix of {cols}")
+    df = pd.DataFrame([diagnostics_row(fields, header, cfg) for fields in lines], columns=cols).fillna("")
+    for c in ("turn", "n_tokens"):
+        df[c] = df[c].astype(int)
+    for c in cols[4:]:
+        unknown = set(df[c]) - set(DIAG_BOOL)
+        if unknown:
+            raise SystemExit(f"{path}: column {c} has values {sorted(unknown)}")
+        df[c] = df[c].map(DIAG_BOOL)
+    return df
+
+
 def check_report_counts(report, cfg, source):
     """Per model, the report's reply count must equal that model's rows in the two dry-run reply files."""
     replies = pd.concat([read_rows(out_path(cfg, k, source)) for k in ("dry_run_csv", "dry_run_arm3_csv")])
@@ -158,9 +206,16 @@ def check_report_counts(report, cfg, source):
 def report_from_files(cfg, source):
     """The dry-run report from dry_run_diagnostics.csv and timing.csv on disk, across every model there."""
     timing = read_rows(out_path(cfg, "timing_csv", source))
-    report = dry_run_report(read_rows(out_path(cfg, "dry_run_diagnostics_csv", source)),
+    report = dry_run_report(read_diagnostics(out_path(cfg, "dry_run_diagnostics_csv", source), cfg),
                             timing[timing["run"] == "dry_run"] if len(timing) else timing)
     check_report_counts(report, cfg, source)
+    return report
+
+
+def write_report(cfg, source):
+    """Rebuild the report from the files and write it; no model is loaded."""
+    report = report_from_files(cfg, source)
+    report.to_csv(out_path(cfg, "dry_run_report_csv", source), index=False)
     return report
 
 
@@ -168,12 +223,18 @@ def report_from_files(cfg, source):
 
 def batch_writer(cfg, source, path, pending):
     """on_rows: append a batch's replies, then its diagnostics and timing, so the three files grow
-    together and a crash loses at most the batch in progress."""
+    together and a crash loses at most the batch in progress. Diagnostics keep the fixed columns."""
+    cols = diagnostics_columns(cfg)
+
     def write(rows):
         append_rows(path, rows)
+        unknown = {k for row in pending["diagnostics"] for k in row} - set(cols)
+        if unknown:
+            raise ValueError(f"diagnostics columns not in the fixed list: {sorted(unknown)}")
         for key, name in (("dry_run_diagnostics_csv", "diagnostics"), ("timing_csv", "timing")):
             if pending[name]:
-                append_rows(out_path(cfg, key, source), pending[name])
+                table = pd.DataFrame(pending[name])
+                append_rows(out_path(cfg, key, source), table.reindex(columns=cols) if name == "diagnostics" else table)
                 pending[name].clear()
     return write
 
@@ -214,9 +275,7 @@ def run_dry_run(cfg, bank, make_parts, source, model_id=None):
         for arm in ("arm1", "arm2", "arm3"):
             run_one_arm(parts, cfg, arm, cells[arm], answers, source)
         parts["close"]()
-    report = report_from_files(cfg, source)
-    report.to_csv(out_path(cfg, "dry_run_report_csv", source), index=False)
-    return report
+    return write_report(cfg, source)
 
 
 # ---------- the real model ----------
@@ -286,8 +345,11 @@ class MockTokenizer:
 
 
 def mock_parts(spec, cfg):
-    """Parts without a model: every reply is the same hint, so no dialogue stops early."""
+    """Parts without a model: every reply is the same hint, so no dialogue stops early. Round trips as
+    in the config (Ministral's extra one too), so the mock writes the same diagnostics columns."""
     tok = MockTokenizer()
+    also = cfg["dry_run"].get("roundtrip_also", {}).get(spec["id"])
+    roundtrip = {"own": tok, **({roundtrip_name(also): tok} if also else {})}
 
     def make(gen, stash):
         def generate(prompts):
@@ -300,5 +362,5 @@ def mock_parts(spec, cfg):
             "render": lambda messages: "\n".join(m["content"] for m in messages), "encode": tok.encode,
             "info": {"model": spec["id"], "revision": spec["revision"], "precision": "mock", "packages": {},
                      "lock_checked": False, "generation_config_diff": {}},
-            "make_generate": make, "set_seed": lambda seed: None, "roundtrip": {"own": tok}, "gpu": None,
+            "make_generate": make, "set_seed": lambda seed: None, "roundtrip": roundtrip, "gpu": None,
             "close": lambda: None}
