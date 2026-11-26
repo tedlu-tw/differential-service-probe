@@ -1,7 +1,8 @@
-# v4 (docs/protocol_v4.md, Environment). Install in its own virtual environment on the pod;
-# v3's environment is never upgraded. requirements_v4.lock.txt, a pip freeze of the v4
-# environment built from a freeze of v3's environment, is committed before the dry run and
-# pins every package exactly, numpy, pandas and pyyaml included.
+# v4 (docs/protocol_v4.md, Environment). Install in its own virtual environment on the pod.
+# requirements_v4.lock.txt, a pip freeze of the v4 environment, is committed before the dry run
+# and pins every package exactly, numpy, pandas and pyyaml included. v3's environment was lost
+# with its pod (docs/deviations_v4.md, 2026-11-26), so the lock is built from these pins alone,
+# on Python 3.12.3 as in v3.
 numpy>=1.24
 pandas>=2.0
 pyyaml>=6.0
